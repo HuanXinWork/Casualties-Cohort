@@ -14,6 +14,7 @@ namespace Together.MpConstants {
 
         // 常用世界生成与伤害特效预制体名
         public const string PrefabBloodExplosion = "BloodExplosion";
+        public const string PrefabBulletCasing = "casing";
         public const string PrefabDroppings = "droppings";
 
         // 常用原版角色台词与提示键

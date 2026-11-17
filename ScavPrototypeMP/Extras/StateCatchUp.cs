@@ -4,6 +4,7 @@ using System.Reflection;
 using HarmonyLib;
 using LiteEntitySystem;
 using KrokV5Optimization;
+using Together.MpConstants;
 
 namespace Together;
 
@@ -15,8 +16,8 @@ namespace Together;
 /// </summary>
 internal static class StateCatchUp
 {
-	// 放宽就绪队列水位至 6（~200ms @ 30Hz），使常规 2~3 包网络微突发仍交由 LES 原生抖动缓冲平滑插值，仅在真实卡顿积压时介入追赶
-	const int KeepReady = 6;
+	// 统一引用 NetTimingConstants.EntityStateCatchUpKeepReady（~200ms @ 30Hz），常规微突发交由 LES 原生抖动缓冲平滑插值
+	const int KeepReady = NetTimingConstants.EntityStateCatchUpKeepReady;
 
 	static readonly List<object> _pendingScratch = new List<object>(16);
 

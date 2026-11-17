@@ -1,25 +1,18 @@
 #if FULLGAME
-using CasualtiesTogetherUtils;
+using System.Collections.Generic;
 using HarmonyLib;
 using LiteNetLib;
 using LiteNetLib.Utils;
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Reflection;
 using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.Rendering.Universal;
 
 namespace Together;
 
-// CS-style local crystal authority for Together:
-// host stamps a one-shot props bag; clients apply via SetUpEffects Prefix and mark the GO local.
-// custom Structures markers are detected by type name so we coexist without a hard CS dependency.
-// legacy CrystalAuthority fill/specials remain for unmarked shells and mutations until fully retired.
-
+/// <summary>标记已由 Together 水晶本地属性包或 Custom Structures 接管权威属性的水晶对象。</summary>
 public class TogetherCrystalLocalMarker : MonoBehaviour { }
 
+/// <summary>一次性注入客户端水晶的完整外观、光照、地热与特效快照。</summary>
 public class TogetherCrystalProps : MonoBehaviour {
     public string EffectsCsv;
     public byte[] EffectIds;
@@ -41,7 +34,11 @@ public class TogetherCrystalProps : MonoBehaviour {
     public bool Initialized;
 }
 
-public static class CrystalLocalAuthority {
+/// <summary>
+/// 正式版水晶单包权威同步控制器（缓存、Bag 捕获分发与网络包接收分部）：
+/// 房主在生成完毕或突变时捕获完整属性包（Bag），客机收到后通过 <c>SetUpEffects</c> 前缀一次性还原，并与 Custom Structures 无依赖共存。
+/// </summary>
+public static partial class CrystalLocalAuthority {
     public const byte FlagFlip = 2;
     public const byte FlagHasHeater = 4;
     public const byte FlagVolumeLight = 8;
@@ -54,7 +51,6 @@ public static class CrystalLocalAuthority {
     static readonly Dictionary<knetid, byte[]> _bagBySync = new();
     static readonly HashSet<knetid> _bagApplied = new();
     static readonly Dictionary<knetid, float> _nextBagRequestAt = new();
-    static FieldInfo _crystalEffectsField;
 
     public static void ClearLayerCaches() {
         _bagBySync.Clear();
@@ -132,16 +128,13 @@ public static class CrystalLocalAuthority {
         if (go == null) {
             return false;
         }
-        CrystalBehaviour crystal = null;
-        go.TryGetComponent(out crystal);
+        go.TryGetComponent(out CrystalBehaviour crystal);
         if (crystal == null && !CrystalAuthority.IsGenerationDone(go)) {
             return false;
         }
 
         List<CrystalEffect> effects = crystal != null ? CrystalAuthority.GetEffects(crystal) : null;
-        if (effects == null) {
-            effects = new List<CrystalEffect>();
-        }
+        effects ??= new List<CrystalEffect>();
         if (crystal != null && effects.Count == 0 && !CrystalAuthority.IsGenerationDone(go)) {
             return false;
         }
@@ -224,7 +217,6 @@ public static class CrystalLocalAuthority {
             return;
         }
         if (HasCustomStructuresCrystalAuth(go)) {
-            // CS owns structure crystals; don't fight their local props.
             return;
         }
         if (si == null) {
@@ -370,7 +362,6 @@ public static class CrystalLocalAuthority {
         bool special = (flags & FlagSpecial) != 0 && effectCount > 0;
         if (!go.TryGetComponent(out CrystalBehaviour crystal)) {
             if (!special) {
-                // inert decorative: color only, no CB
                 var sr = go.GetComponent<SpriteRenderer>();
                 if (sr != null) {
                     sr.color = props.SpriteColor;
@@ -400,7 +391,6 @@ public static class CrystalLocalAuthority {
         ApplyFlip(go, flags);
         CrystalAuthority.SetSpecial(go, special);
 
-        // setUpEffects Prefix consumes props and builds effects/colors.
         crystal.SetUpEffects();
 
         if ((flags & FlagHasHeater) != 0) {
@@ -410,12 +400,8 @@ public static class CrystalLocalAuthority {
             go.GetOrAddComponent<HeaterMultiplayerRewrite>();
         }
 
-        if (special) {
-            if (go.TryGetComponent(out UsableObject usable) && usable != null) {
-                usable.enabled = true;
-            }
-        } else if (go.TryGetComponent(out CrystalBehaviour leftover) && leftover != null) {
-            // inert after SetUpEffects may already have destroyed CB; ignore
+        if (special && go.TryGetComponent(out UsableObject usable) && usable != null) {
+            usable.enabled = true;
         }
 
         MarkLocal(go);
@@ -458,200 +444,6 @@ public static class CrystalLocalAuthority {
         Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
     }
 
-    public static string CrystalResourceKey(GameObject go) {
-        if (go == null) {
-            return null;
-        }
-        if (go.TryGetComponent(out BuildingEntity build) && !string.IsNullOrEmpty(build.id)) {
-            return build.id;
-        }
-        string name = go.name;
-        if (string.IsNullOrEmpty(name)) {
-            return null;
-        }
-        if (name.EndsWith("(Clone)", StringComparison.Ordinal)) {
-            name = name.Substring(0, name.Length - "(Clone)".Length);
-        }
-        int mark = name.IndexOf("res: ", StringComparison.Ordinal);
-        if (mark >= 0) {
-            int start = mark + 5;
-            int end = name.IndexOf(')', start);
-            if (end > start) {
-                return name.Substring(start, end - start).Trim();
-            }
-        }
-        return name;
-    }
-
-    public static bool ResourceIdsMatch(string wantedRes, GameObject go) {
-        if (string.IsNullOrEmpty(wantedRes) || go == null) {
-            return false;
-        }
-        string key = CrystalResourceKey(go);
-        if (!string.IsNullOrEmpty(key)) {
-            return string.Equals(key, wantedRes, StringComparison.OrdinalIgnoreCase);
-        }
-        return false;
-    }
-
-    public static bool HasLocalMarkedCrystalAt(Vector2 position, GameObject except = null, string requiredRes = null) {
-        CrystalBehaviour[] crystals = UnityEngine.Object.FindObjectsOfType<CrystalBehaviour>();
-        for (int i = 0; i < crystals.Length; i++) {
-            CrystalBehaviour c = crystals[i];
-            if (c == null) {
-                continue;
-            }
-            GameObject go = c.gameObject;
-            if (except != null && go == except) {
-                continue;
-            }
-            if (!IsLocalAuth(go) || (requiredRes != null && !ResourceIdsMatch(requiredRes, go))) {
-                continue;
-            }
-            Vector2 delta = (Vector2)go.transform.position - position;
-            if (delta.sqrMagnitude <= MatchRadiusSq) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public static GameObject FindLocalMarkedCrystalAt(Vector2 position, GameObject except = null, string requiredRes = null) {
-        CrystalBehaviour[] crystals = UnityEngine.Object.FindObjectsOfType<CrystalBehaviour>();
-        GameObject best = null;
-        float bestSq = MatchRadiusSq;
-        for (int i = 0; i < crystals.Length; i++) {
-            CrystalBehaviour c = crystals[i];
-            if (c == null) {
-                continue;
-            }
-            GameObject go = c.gameObject;
-            if (except != null && go == except) {
-                continue;
-            }
-            if (!IsLocalAuth(go) || (requiredRes != null && !ResourceIdsMatch(requiredRes, go))) {
-                continue;
-            }
-            float sq = ((Vector2)go.transform.position - position).sqrMagnitude;
-            if (sq <= bestSq) {
-                bestSq = sq;
-                best = go;
-            }
-        }
-        return best;
-    }
-
-    // network shell landed on top of a CS/Together local crystal - rebind SyncInfo and destroy the shell mesh.
-    public static bool TryDiscardReplica(SyncInfo si) {
-        if (!Net.IsClient || si == null || si.go == null) {
-            return false;
-        }
-        GameObject replica = si.go;
-        if (IsLocalAuth(replica) && !HasCustomStructuresCrystalAuth(replica)) {
-            // together shell that already received a bag - keep it.
-            return false;
-        }
-        string requiredRes = null;
-        try {
-            requiredRes = si.resourceId.Value;
-        } catch {
-            requiredRes = null;
-        }
-        GameObject local = FindLocalMarkedCrystalAt(replica.transform.position, replica, requiredRes);
-        if (local == null) {
-            return false;
-        }
-        Plugin.StartCoroutine(DiscardReplicaNextFrame(si, replica, local));
-        return true;
-    }
-
-    static IEnumerator DiscardReplicaNextFrame(SyncInfo si, GameObject replica, GameObject local) {
-        yield return null;
-        if (si == null || local == null) {
-            yield break;
-        }
-        if (replica != null) {
-            try {
-                if (NetObjectRegistry.SyncRegistry.TryGetValue(replica, out var mapped) && mapped == si) {
-                    NetObjectRegistry.SyncRegistry.Remove(replica);
-                }
-                if (replica.TryGetComponent(out SyncInfoGameObjectTracker repTracker)) {
-                    repTracker.syncInfo = null;
-                    UnityEngine.Object.Destroy(repTracker);
-                }
-                UnityEngine.Object.Destroy(replica);
-            } catch (Exception ex) {
-                Plugin.log.LogWarning($"[CrystalLocalAuth] discard replica failed: {ex.Message}");
-            }
-        }
-
-        si.go = local;
-        NetObjectRegistry.SyncRegistry[local] = si;
-        SyncInfoGameObjectTracker tracker = local.GetComponent<SyncInfoGameObjectTracker>()
-            ?? local.AddComponent<SyncInfoGameObjectTracker>();
-        tracker.syncInfo = si;
-        MarkLocal(local);
-        MarkAuthoritySatisfied(si.syncId);
-    }
-
-    public static List<CrystalEffect> CreateEffectsFromIds(byte[] effectIds) {
-        List<CrystalEffect> list = new List<CrystalEffect>();
-        if (effectIds == null || effectIds.Length == 0) {
-            return list;
-        }
-        CrystalAuthority.EnsureEffectMapsPublic();
-        for (int i = 0; i < effectIds.Length; i++) {
-            int id = effectIds[i];
-            CrystalEffect effect = CrystalAuthority.CreateEffectById(id);
-            if (effect != null) {
-                list.Add(effect);
-            }
-        }
-        return list;
-    }
-
-    public static List<CrystalEffect> CreateEffectsFromCsv(string raw) {
-        List<CrystalEffect> list = new List<CrystalEffect>();
-        HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        string[] parts = (raw ?? string.Empty).Split(',');
-        for (int i = 0; i < parts.Length; i++) {
-            string token = parts[i].Trim();
-            if (token.Length == 0 || !seen.Add(token)) {
-                continue;
-            }
-            bool matched = false;
-            foreach (var possible in CrystalBehaviour.possibleEffects) {
-                CrystalEffect effect = possible.factory();
-                if (string.Equals(effect.GetType().Name, "Crystal" + token, StringComparison.OrdinalIgnoreCase)) {
-                    list.Add(effect);
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) {
-                Plugin.log.LogWarning($"[CrystalLocalAuth] Unknown crystal property '{token}'.");
-            }
-        }
-        return list;
-    }
-
-    static FieldInfo CrystalEffectsField {
-        get {
-            if (_crystalEffectsField == null) {
-                _crystalEffectsField = AccessTools.Field(typeof(CrystalBehaviour), "effects");
-            }
-            return _crystalEffectsField;
-        }
-    }
-
-    public static void AssignEffects(CrystalBehaviour crystal, List<CrystalEffect> effects) {
-        if (crystal == null) {
-            return;
-        }
-        crystal.effects = effects ?? new List<CrystalEffect>();
-        CrystalEffectsField?.SetValue(crystal, crystal.effects);
-    }
-
     [ClientReceiver((byte)NetmsgId.CLIENT_CrystalBag)]
     static void Client_ReceiveBag(knetid _, NetDataReader reader) {
         byte[] bag = reader.GetBytesWithLength();
@@ -672,134 +464,4 @@ public static class CrystalLocalAuthority {
         ServerSendBagTo(syncId, new[] { clientId });
     }
 }
-
-[HarmonyPatch(typeof(CrystalBehaviour), nameof(CrystalBehaviour.SetUpEffects))]
-static class CrystalBehaviour_SetUpEffects_LocalAuth_MultiplayerPatch {
-    static bool Prefix(CrystalBehaviour __instance) {
-        if (!Net.IsRunning || __instance == null) {
-            return true;
-        }
-
-        // custom Structures owns its CrystalPropertiesMarker path - do not double-apply.
-        if (CrystalLocalAuthority.FindComponentByTypeName(__instance.gameObject, "CrystalPropertiesMarker") != null) {
-            return true;
-        }
-
-        TogetherCrystalProps props = __instance.GetComponent<TogetherCrystalProps>();
-        if (props == null) {
-            return true;
-        }
-        if (props.Initialized) {
-            return false;
-        }
-        props.Initialized = true;
-
-        List<CrystalEffect> effects;
-        if (props.EffectIds != null && props.EffectIds.Length > 0) {
-            effects = CrystalLocalAuthority.CreateEffectsFromIds(props.EffectIds);
-        } else {
-            effects = CrystalLocalAuthority.CreateEffectsFromCsv(props.EffectsCsv);
-        }
-
-        CrystalLocalAuthority.AssignEffects(__instance, effects);
-        for (int i = 0; i < effects.Count; i++) {
-            effects[i].crystal = __instance;
-            effects[i].Start();
-            if (props.EffectForceMults != null && i < props.EffectForceMults.Length
-                && effects[i] is CrystalGravity
-                && Mathf.Abs(props.EffectForceMults[i]) > 0.1f) {
-                Traverse.Create(effects[i]).Field("forceMult").SetValue(props.EffectForceMults[i] >= 0f ? 1f : -1f);
-            }
-        }
-
-        if (props.HasAuthoredColor) {
-            CrystalAuthority.ApplyingAuthority = true;
-            try {
-                if (__instance.sprite != null) {
-                    __instance.sprite.color = props.SpriteColor;
-                }
-                if (__instance.light != null) {
-                    __instance.light.color = props.LightColor;
-                    __instance.light.intensity = props.Intensity;
-                    __instance.light.volumeIntensityEnabled = (props.Flags & CrystalLocalAuthority.FlagVolumeLight) != 0;
-                    if (__instance.light.volumeIntensityEnabled) {
-                        __instance.light.volumeIntensity = props.Volume;
-                    }
-                    __instance.light.falloffIntensity = props.Falloff;
-                    if (props.OuterRadius > 0f) {
-                        __instance.light.pointLightOuterRadius = props.OuterRadius;
-                    }
-                }
-            } finally {
-                CrystalAuthority.ApplyingAuthority = false;
-            }
-        } else if (!string.IsNullOrEmpty(props.ColorR) || !string.IsNullOrEmpty(props.ColorG) || !string.IsNullOrEmpty(props.ColorB)) {
-            if (TryParseRgb(props, out Color color)) {
-                if (__instance.sprite != null) {
-                    __instance.sprite.color = color;
-                }
-                if (__instance.light != null) {
-                    __instance.light.color = color;
-                }
-            }
-        }
-
-        if (effects.Count > 1) {
-            GameObject distort = Utils.Create("Special/CrystalDistort", __instance.transform);
-            if (distort != null) {
-                distort.transform.localPosition = Vector3.zero;
-                distort.transform.localScale = Vector3.one;
-                distort.transform.rotation = Quaternion.identity;
-                SpriteRenderer sr = distort.GetComponent<SpriteRenderer>();
-                if (sr != null && sr.material != null) {
-                    sr.material.SetFloat("_DistortStrength", effects.Count * 0.015f);
-                }
-            }
-        }
-
-        if (effects.Count > 0 && WorldGeneration.world != null) {
-            __instance.CheckCurrentChunk(WorldGeneration.world.GetClosestChunkScript(__instance.transform.position));
-        }
-
-        if (__instance.build != null && effects.Count > 0) {
-            __instance.build.description = Locale.GetBuilding(__instance.build.id + "dsc");
-            string key = effects.Count switch {
-                1 => "crystaleffect1",
-                2 => "crystaleffect2",
-                3 => "crystaleffect3",
-                4 => "crystaleffect4",
-                _ => "crystaleffectmany",
-            };
-            __instance.build.description += " " + Locale.GetOther(key);
-            __instance.build.skipDescriptionSet = true;
-        }
-
-        if (effects.Count == 0) {
-            UsableObject usable = __instance.GetComponent<UsableObject>();
-            if (usable != null) {
-                UnityEngine.Object.Destroy(usable);
-            }
-            UnityEngine.Object.Destroy(__instance);
-        }
-
-        CrystalLocalAuthority.MarkLocal(__instance != null ? __instance.gameObject : props.gameObject);
-        return false;
-    }
-
-    static bool TryParseRgb(TogetherCrystalProps props, out Color color) {
-        color = Color.white;
-        if (!float.TryParse(props.ColorR, out float r)) {
-            r = 1f;
-        }
-        if (!float.TryParse(props.ColorG, out float g)) {
-            g = 1f;
-        }
-        if (!float.TryParse(props.ColorB, out float b)) {
-            b = 1f;
-        }
-        color = new Color(r, g, b, 1f);
-        return true;
-    }
-}
-
 #endif

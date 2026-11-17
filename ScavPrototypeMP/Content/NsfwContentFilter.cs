@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using Together.Diagnostics;
 using UnityEngine;
 
 namespace Together;
@@ -64,7 +65,9 @@ public static class NsfwContentFilter {
         try {
             PlayerPrefs.SetString("KrokoshaMultiplayer_LastMyLobbyName", DefaultSafeServerName);
             PlayerPrefs.Save();
-        } catch { /* ignore */ }
+        } catch (Exception ex) {
+            ModLog.Debug("NsfwContentFilter PlayerPrefs save skipped: " + ex.Message, LogDomain.Security);
+        }
 #endif
     }
 
@@ -76,7 +79,10 @@ public static class NsfwContentFilter {
             if (PlayerCamera.main != null) {
                 PlayerCamera.main.DoAlert(msg, important: true);
             }
-        } catch { /* menu may lack PlayerCamera */ }
+        } catch (Exception ex) {
+            // 主菜单阶段可能尚未初始化 PlayerCamera，安全降级由下方弹窗承载提示
+            ModLog.Debug("NsfwContentFilter DoAlert skipped: " + ex.Message, LogDomain.Security);
+        }
 
         try {
             if (UIChoicePrompt.instance != null) {

@@ -3,18 +3,14 @@
 
 using CasualtiesTogetherUtils;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Net.Http;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Tasks;
-using System.Xml.Linq;
 using TMPro;
+using Together.Diagnostics;
 using Unity.VisualScripting;
 using UnityEngine;
 
@@ -54,8 +50,7 @@ public partial class KnownPersons : CasualtiesTogetherSingleton {
             plr.KnownUserTagIcons.AddIfNotPresent(dune_stare);
         }
 #endif
-        if (Net.TryGetSteamTransport(out var tsteam)) {
-            var id = plr.SteamId;
+        if (Net.TryGetSteamTransport(out _)) {
             if (STARS.Contains(plr.SteamId)) {
                 plr.KnownUserTagIcons.AddIfNotPresent(CoopModAssets.star_yellow);
             }
@@ -96,9 +91,7 @@ public partial class KnownPersons : CasualtiesTogetherSingleton {
             var read = CoopModAssets.ReadResource(fileName).ToStringFromCharBytes();
             AddStars(read);
         } catch (Exception e) {
-#if TESTING
-            log.error($"DEBUG: Resource Stars: {e}");
-#endif
+            ModLog.Debug($"KnownPersons.LoadEverything skipped: {e.Message}", LogDomain.Lobby);
         }
 
         inst.SendMessage("ExtraKnownPersonsLoad", SendMessageOptions.DontRequireReceiver);

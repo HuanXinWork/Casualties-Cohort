@@ -1,17 +1,18 @@
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using CasualtiesTogetherUtils;
+using Together.Diagnostics;
 using UnityEngine;
 
 namespace Together.UI.TeammateList;
 
+/// <summary>
+/// 局内队友状态列表子系统静态宿主：管理快捷键配置、观察者芯片状态与每帧更新/绘制入口。
+/// </summary>
 internal static class TeammateListHost {
     internal static ManualLogSource Log;
-
     internal static Roster Roster;
-
     internal static ConfigEntry<KeyboardShortcut> CollapseKey;
-
     internal static bool ViewerUnchipped;
 
     internal static void Init(Plugin plugin) {
@@ -24,7 +25,7 @@ internal static class TeammateListHost {
         Roster = new Roster();
         Bind.EnsureRow();
         RefreshViewerChip();
-        Log.LogInfo($"TeammateList integrated collapse={CollapseKey.Value}");
+        ModLog.Info($"TeammateList integrated collapse={CollapseKey.Value}", LogDomain.UI);
     }
 
     internal static void Tick() {

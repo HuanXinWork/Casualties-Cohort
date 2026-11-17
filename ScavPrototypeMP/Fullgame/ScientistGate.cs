@@ -3,20 +3,30 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
 using LiteNetLib.Utils;
+using Together.Core;
+using Together.Diagnostics;
+using Together.MpConstants;
 using UnityEngine;
 
 namespace Together;
 
-// each peer keeps the scientist it generated, so the lines stay on that species.
-// nobody starts until every player has spawned and cleared the arrival card.
-// the first living body with x < 17 starts it for everyone.
-// hp is one pool on the host. the shot still goes through the existing broadcast.
+/// <summary>
+/// 终局实验室（第 11 层）科学家演出门控与共享血池控制器：
+/// 各端保留本地生成的科学家实体以匹配各自物种台词，待全员清除入场卡片且有人踏入房间（x &lt; 17）后统一放行对话；
+/// 科学家生命值由房主权威维护并向客机广播。
+/// </summary>
 public static class ScientistGate {
+    /// <summary>全员就绪且有人进入房间后置为 true，放行科学家对话协程。</summary>
     public static bool Go;
+    /// <summary>本机科学家绑定的可受击建筑实体。</summary>
     public static BuildingEntity HealthBuilding;
+
+    private const float MaxValidDamageDelta = 5000f;
+    private const float MaxLabDamageReportDistance = 80f;
 
     static readonly HashSet<knetid> Ready = new();
     static bool _sentReady;
@@ -30,6 +40,9 @@ public static class ScientistGate {
         Ready.Clear();
     }
 
+    /// <summary>
+    /// 为本机生成的科学家对象树打上忽略网络追踪标记，避免被通用实体同步覆盖，同时捕获其受击血量组件。
+    /// </summary>
     public static void KeepLocal(EndLabScript lab) {
         if (lab == null) {
             return;
@@ -73,8 +86,8 @@ public static class ScientistGate {
             if (Net.IsServer) {
                 _hostSelfReady = true;
             } else {
-                NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
-                writer.Put("scientist_ready");
+                NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+                writer.Put(CustomWireCommands.ScientistReady);
                 Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
             }
         }
@@ -85,8 +98,8 @@ public static class ScientistGate {
             return;
         }
         Go = true;
-        NetDataWriter go = Multiplayer.CreateNamedWriter("CustomCommand");
-        go.Put("scientist_go");
+        NetDataWriter go = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+        go.Put(CustomWireCommands.ScientistGo);
         Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, go, ServerMain.AllClientIdsExceptHost);
     }
 
@@ -95,20 +108,26 @@ public static class ScientistGate {
     }
 
     public static void ReportDamage(float delta) {
-        if (delta <= 0.05f || HealthBuilding == null || _applyingHp || ConcurrentEndings.ScientistDead) {
+        if (!Util.IsFinite(delta) || delta <= 0.05f || HealthBuilding == null || _applyingHp || ConcurrentEndings.ScientistDead) {
             return;
         }
         if (Net.IsServer) {
             BroadcastHealth(HealthBuilding.health);
             return;
         }
-        NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
-        writer.Put("scientist_hp " + delta.ToString("R", CultureInfo.InvariantCulture));
+        NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+        writer.Put(CustomWireCommands.ScientistHp + " " + delta.ToString("R", CultureInfo.InvariantCulture));
         Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
     }
 
+    /// <summary>
+    /// 房主权威结算客机上报的科学家伤害差值并向全员同步最新生命值。
+    /// </summary>
     public static void HostAcceptDamage(float delta) {
-        if (!Net.IsServer || delta <= 0.05f || HealthBuilding == null) {
+        if (!Net.IsServer || !Util.IsFinite(delta) || delta <= 0.05f || delta > MaxValidDamageDelta || HealthBuilding == null) {
+            return;
+        }
+        if (WorldGeneration.world == null || WorldGeneration.world.biomeDepth != 11 || EndLabScript.instance == null || ConcurrentEndings.ScientistDead) {
             return;
         }
         ApplyRaw(Mathf.Max(0f, HealthBuilding.health - delta));
@@ -116,7 +135,7 @@ public static class ScientistGate {
     }
 
     public static void ApplyRemoteHealth(float value) {
-        if (HealthBuilding == null) {
+        if (HealthBuilding == null || !Util.IsFinite(value)) {
             return;
         }
         ApplyRaw(value);
@@ -126,8 +145,8 @@ public static class ScientistGate {
         if (!Net.IsServer) {
             return;
         }
-        NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
-        writer.Put("scientist_hp");
+        NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+        writer.Put(CustomWireCommands.ScientistHp);
         writer.Put(value);
         Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, ServerMain.AllClientIdsExceptHost);
     }
@@ -165,7 +184,8 @@ public static class ScientistGate {
             if (alert > 0f) {
                 return false;
             }
-        } catch (Exception) {
+        } catch (Exception ex) {
+            ModLog.Debug(LogDomain.Story, $"ScientistGate: failed to inspect PlayerCamera.alertTime: {ex.Message}");
         }
         return true;
     }
@@ -198,9 +218,10 @@ public static class ScientistGate {
         return local != null && local.alive && local.transform.position.x < 17f;
     }
 
-    // vanilla yields twice before the scientist speaks: once for worldgen, once for x < 17.
-    // the lab theme is played on the second step. run that on this machine as soon as the
-    // local world exists. dialogue still waits for scientist_go.
+    /// <summary>
+    /// 原版协程在科学家开口前 yield 两次（等待世界生成、等待进入 x &lt; 17 并播放实验室主题曲）。
+    /// 联机下允许本机提前推进到播放背景音乐阶段，实际台词则挂起等待房主广播 <c>scientist_go</c>。
+    /// </summary>
     public static IEnumerator Drive(EndLabScript lab) {
         IEnumerator inner = EndLabScript_ScientistCutscene_Gate.Original(lab);
         if (!inner.MoveNext()) {
@@ -250,24 +271,41 @@ public static class ScientistGate {
 
     [CTPostInit]
     static void Init() {
-        ServerMain.ServerCustomCommandsDict["scientist_ready"] = (plr, cmd, args) => {
-            if (plr != null) {
-                MarkReady(plr.playerId);
-            }
-        };
-        ServerMain.ServerCustomCommandsDict["scientist_hp"] = (plr, cmd, args) => {
-            if (args == null || args.Length < 2) {
+        ServerMain.ServerCustomCommandsDict[CustomWireCommands.ScientistReady] = (plr, cmd, args) => {
+            if (plr == null || WorldGeneration.world == null || WorldGeneration.world.biomeDepth != 11) {
                 return;
             }
-            if (!float.TryParse(args[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float delta)) {
+            MarkReady(plr.playerId);
+        };
+        ServerMain.ServerCustomCommandsDict[CustomWireCommands.ScientistHp] = (plr, cmd, args) => {
+            if (plr == null || args == null || args.Length < 2) {
+                return;
+            }
+            // 严格验证调用者在终局实验室层存活且处于有效交互距离内，防止跨层伪造扣血包
+            if (!NetGuard.TryVerifyCaller(plr.playerId, CallerPolicy.AliveInWorld, LogDomain.Story, 0, out VerifiedCaller caller)) {
+                return;
+            }
+            if (WorldGeneration.world == null || WorldGeneration.world.biomeDepth != 11 || EndLabScript.instance == null || HealthBuilding == null) {
+                MpFlightRecorder.Record(LogDomain.Security, FlightEventKind.GuardDenied, plr.playerId.id);
+                return;
+            }
+            if (!NetGuard.IsWithinDistance(in caller, HealthBuilding.transform.position, MaxLabDamageReportDistance)) {
+                MpFlightRecorder.Record(LogDomain.Security, FlightEventKind.GuardDenied, plr.playerId.id);
+                return;
+            }
+            if (!float.TryParse(args[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float delta)
+                || !Util.IsFinite(delta)
+                || delta <= 0.05f
+                || delta > MaxValidDamageDelta) {
+                MpFlightRecorder.Record(LogDomain.Security, FlightEventKind.PacketReject, plr.playerId.id);
                 return;
             }
             HostAcceptDamage(delta);
         };
-        ClientMain.ClientCustomCommandsDict["scientist_go"] = (cmd, reader) => {
+        ClientMain.ClientCustomCommandsDict[CustomWireCommands.ScientistGo] = (cmd, reader) => {
             Go = true;
         };
-        ClientMain.ClientCustomCommandsDict["scientist_hp"] = (cmd, reader) => {
+        ClientMain.ClientCustomCommandsDict[CustomWireCommands.ScientistHp] = (cmd, reader) => {
             ApplyRemoteHealth(reader.GetFloat());
         };
     }

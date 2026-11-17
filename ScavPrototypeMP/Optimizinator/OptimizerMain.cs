@@ -41,10 +41,7 @@ public static class OptimizerMain {
 
         _harmony = new Harmony(OptimizerMain.GUID);
         if (CompressPooling.Value) {
-            Try(typeof(FixUtilCompress));
-            Try(typeof(FixUtilDecompress));
-            Try(typeof(FixUtilCompressDeflate));
-            Try(typeof(FixUtilDecompressDeflate));
+            // Util.Compress* 已直接内联 CompressPool 池化实现，此处仅对世界区块补丁启用
             Try(typeof(FixChunkBlock));
             Try(typeof(FixChunkFluid));
         }

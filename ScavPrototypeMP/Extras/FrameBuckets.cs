@@ -17,7 +17,8 @@ static class FrameBuckets {
             if (SharedMain.LocalWorldIsGenerating)
                 return true;
             return WorldGeneration.world != null && WorldGeneration.world.generatingWorld;
-        } catch {
+        } catch (System.Exception) {
+            // 场景切换或销毁瞬间访问 WorldGeneration.world 可能触发 Unity 对象生命周期异常，降级视为未在生成中
             return false;
         }
     }

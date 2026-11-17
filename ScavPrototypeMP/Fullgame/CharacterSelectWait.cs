@@ -1,27 +1,28 @@
 #if FULLGAME
-using CasualtiesTogetherUtils;
-using HarmonyLib;
-using LiteNetLib;
-using Newtonsoft.Json.Linq;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
-using TMPro;
+using CasualtiesTogetherUtils;
+using HarmonyLib;
+using LiteNetLib;
+using LiteNetLib.Utils;
+using Newtonsoft.Json.Linq;
+using Together.Diagnostics;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace Together;
 
-// flow:
-//   run presets: Next stays stock -> species select -> Ready up [n/max] -> host starts
-//   continue / LoadRun: skip species select, seed from saves, host loads immediately
-// mid-run late join (no save): CLIENT_LateJoinCharSelect -> solo Join -> spawn -> StartGameAnnouncement
-public static class CharacterSelectWait {
+/// <summary>
+/// 正式版联机角色选择与准备就绪门控协调器（大厅状态机、存档物种恢复、中途加入握手与网络协议分部）：
+/// 新开局进入物种选择并等待全员 Ready [n/max] 后发车；读档继续则直接按存档物种跳过选人；无存档中途加入单人选定物种后直接空投。
+/// </summary>
+public static partial class CharacterSelectWait {
     public static bool Waiting { get; private set; }
     public static bool LocalConfirmed { get; private set; }
     public static int ReadyCount { get; private set; }
     public static int MaxCount { get; private set; }
-    // client mid-run pick before WaitLoad
+    /// <summary>客机中途加入正在选定物种阶段（尚未进入 WaitLoad）。</summary>
     public static bool LateJoinPicking { get; private set; }
 
     const float ProceedDelaySeconds = 1f;
@@ -30,27 +31,13 @@ public static class CharacterSelectWait {
     static readonly HashSet<knetid> _pendingLateJoin = new HashSet<knetid>();
     static bool _pendingLoadSave;
     static bool _pendingTutorial;
-    // title Tutorial button opens run settings. Back must close it again.
     static bool _openedRunSettings;
-    // leftover protocol bit for CLIENT_CharSelectWait (new-run gate never locks)
     static bool _speciesLocked;
     static byte _lockedSpecies;
-    static readonly List<ReadyButton> _readyButtons = new List<ReadyButton>();
-    static readonly List<GameObject> _hiddenRunRulePanels = new List<GameObject>();
     static int _proceedToken;
     static bool _netHooks;
-    static bool _uiHooks;
-    static Button _charSelectStart;
-    static Button _presetsNext;
-    static Button _charSelectBack;
 
     public static bool SpeciesLocked => Waiting && _speciesLocked;
-
-    struct ReadyButton {
-        public Button button;
-        public TextMeshProUGUI label;
-        public string originalText;
-    }
 
     static void EnsureNetHooks() {
         if (_netHooks) {
@@ -59,52 +46,6 @@ public static class CharacterSelectWait {
         _netHooks = true;
         ScavPlayer.OnPlayerJoined += OnLobbyPlayerJoined;
         ScavPlayer.OnPlayerLeft += OnLobbyPlayerLeft;
-    }
-
-    public static void EnsureUiHooks(PreRunScript prs) {
-        if (prs == null || _uiHooks) {
-            return;
-        }
-        _uiHooks = true;
-
-        Transform root = prs.runSettingsScreen != null ? prs.runSettingsScreen.transform : prs.transform;
-        Transform presets = FindDeepChild(root, "Presets");
-        Transform charSelect = FindCharSelectRoot(prs) ?? FindDeepChild(root, "CharSelect");
-
-        if (presets != null) {
-            Transform nextTf = FindDeepChild(presets, "Start");
-            if (nextTf != null) {
-                _presetsNext = nextTf.GetComponent<Button>();
-                if (_presetsNext != null) {
-                    _presetsNext.onClick.AddListener(OnPresetsNextClicked);
-                }
-            }
-        }
-
-        if (charSelect != null) {
-            Transform startTf = FindDeepChild(charSelect, "Start");
-            // prefer Bottom/Start over any other Start under CharSelect
-            Transform bottom = FindDeepChild(charSelect, "Bottom");
-            if (bottom != null) {
-                Transform bottomStart = FindDeepChild(bottom, "Start");
-                if (bottomStart != null) {
-                    startTf = bottomStart;
-                }
-            }
-            if (startTf != null) {
-                // cache only - StartRun Prefix owns ready toggles (avoid double-fire with AddListener)
-                _charSelectStart = startTf.GetComponent<Button>();
-            }
-            Transform backTf = FindDeepChild(charSelect, "Back");
-            if (backTf != null) {
-                _charSelectBack = backTf.GetComponent<Button>();
-                if (_charSelectBack != null) {
-                    _charSelectBack.onClick.AddListener(OnCharSelectBackClicked);
-                }
-            }
-        }
-
-        log.warn($"CharacterSelectWait UI hooks: next={_presetsNext != null} start={_charSelectStart != null} back={_charSelectBack != null}");
     }
 
     static void OnLobbyPlayerJoined(ScavPlayer plr) {
@@ -149,7 +90,6 @@ public static class CharacterSelectWait {
         return _pendingLateJoin.Contains(clientId);
     }
 
-    // checkpoint file, else in-memory leave state
     public static bool TryResolveSavedSpecies(ScavPlayer plr, out byte chr) {
         if (TryReadSavedCharacter(plr, out chr)) {
             return true;
@@ -178,7 +118,7 @@ public static class CharacterSelectWait {
         plr.selectedCharacter = (byte)CharacterSpawn.ClampChar(character);
         plr.CreateCharacter();
 
-        LiteNetLib.Utils.NetDataWriter writer = Net.CreateWriter(NetmsgId.StartGameAnnouncement);
+        NetDataWriter writer = Net.CreateWriter(NetmsgId.StartGameAnnouncement);
         writer.Put(ServerMain.LastStartGameAnnouncementPacket);
         writer.Put(WorldMP.CompileRunSettings(), true);
         AchievementBreakSync.WriteAnnouncementFlag(writer);
@@ -187,12 +127,11 @@ public static class CharacterSelectWait {
         Multiplayer.DoMultiplayerStatusMessageLog($"{plr.playerName} joining as species {plr.selectedCharacter}...");
     }
 
-    // pack every player's Ready/join species so late joiners' loading sprites aren't all local.
-    public static void WriteSpeciesRoster(LiteNetLib.Utils.NetDataWriter writer) {
+    /// <summary>将全房间玩家选定物种列表打包写入开局公告，避免中途加入者加载界面全部回退为本地物种立绘。</summary>
+    public static void WriteSpeciesRoster(NetDataWriter writer) {
         if (writer == null) {
             return;
         }
-        // selectedCharacter only. body/sync var can be unset in the lobby and must not abort announce.
         List<knetid> ids = new List<knetid>();
         List<byte> chrs = new List<byte>();
         foreach (ScavPlayer plr in ScavPlayer.AllPlayers) {
@@ -210,7 +149,7 @@ public static class CharacterSelectWait {
         }
     }
 
-    public static void ReadSpeciesRoster(LiteNetLib.Utils.NetDataReader reader) {
+    public static void ReadSpeciesRoster(NetDataReader reader) {
         if (reader == null || reader.EndOfData) {
             return;
         }
@@ -247,11 +186,9 @@ public static class CharacterSelectWait {
     }
 
     public static bool ShouldBlockStartGameAnnouncement() {
-        // still on pick UI - ignore stray announcement until Join completes
         return LateJoinPicking && !LocalConfirmed;
     }
 
-    // next on presets -> enter species-select ready gate (new run)
     static void OnPresetsNextClicked() {
         if (!Net.IsRunning) {
             return;
@@ -268,7 +205,6 @@ public static class CharacterSelectWait {
         }
     }
 
-    // tutorial uses the species screen. only the host has to confirm.
     public static void HostBeginTutorialPick() {
         if (!Net.IsRunning || !Net.IsServer) {
             return;
@@ -284,10 +220,8 @@ public static class CharacterSelectWait {
 
     static void OnCharSelectBackClicked() {
         if (!Waiting || LateJoinPicking) {
-            // mid-run join: stuck on species until Join (no presets to return to)
             return;
         }
-        // back to presets, or back to the title if Tutorial opened this screen
         Reset();
     }
 
@@ -303,7 +237,6 @@ public static class CharacterSelectWait {
         }
     }
 
-    // new-run only - Continue never opens this gate
     static void OpenLobbyGate(bool tutorial = false) {
         EnsureNetHooks();
         CancelProceed();
@@ -335,7 +268,6 @@ public static class CharacterSelectWait {
         }
     }
 
-    // continue: seed species from each player's save and load immediately (no char select).
     static void HostContinueDirectly() {
         EnsureNetHooks();
         CancelProceed();
@@ -414,8 +346,8 @@ public static class CharacterSelectWait {
                 chr = (byte)CharacterSpawn.ClampChar((int)jObject["body"]["charType"]);
                 return true;
             }
-        } catch (System.Exception e) {
-            log.warn($"TryReadSavedCharacter failed for {plr}: {e.Message}");
+        } catch (Exception e) {
+            ModLog.Warn(LogDomain.Lobby, $"TryReadSavedCharacter failed for {plr}: {e.Message}");
         }
         return false;
     }
@@ -444,12 +376,10 @@ public static class CharacterSelectWait {
         SetCharBrowseInteractable(PreRunScript.instance, true);
     }
 
-    // startRun -> ready gate; LoadRun / Continue -> direct load
     public static void OnStartOrLoadClicked(bool loadSave) {
         if (!Net.IsRunning) {
             return;
         }
-
         if (loadSave) {
             if (Net.IsClient) {
                 Multiplayer.DoMultiplayerStatusMessageLog("Waiting for host to continue...");
@@ -461,18 +391,14 @@ public static class CharacterSelectWait {
             HostContinueDirectly();
             return;
         }
-
         if (Waiting) {
             if (LateJoinPicking) {
-                // mid-run: Start = Join (confirm species once)
                 SetLocalReady(true);
                 return;
             }
-            // charSelect Bottom/Start is always StartRun - ready toggle only
             ToggleLocalReady();
             return;
         }
-
         if (Net.IsClient) {
             Multiplayer.DoMultiplayerStatusMessageLog("Waiting for host to pick a run...");
             return;
@@ -496,8 +422,6 @@ public static class CharacterSelectWait {
             ScavPlayer.LocalPlayer.selectedCharacter = ch;
         }
         PreRunScript.characterSelected = ch;
-        // always push the pick - waiting until Ready left host on Expie when the body
-        // already existed (early spawn / direct-IP) while the client UI showed Dune.
         SendOrRecordReady(LocalConfirmed, ch);
     }
 
@@ -520,7 +444,6 @@ public static class CharacterSelectWait {
             ScavPlayer.LocalPlayer.selectedCharacter = ch;
         }
         PreRunScript.characterSelected = ch;
-        // record first so ReadyCount updates before the label paints
         SendOrRecordReady(ready, ch);
         LocalConfirmed = ready;
         ForceCharSelectReadyVisual(PreRunScript.instance);
@@ -530,7 +453,7 @@ public static class CharacterSelectWait {
         if (Net.IsServer) {
             ScavPlayer host = ScavPlayer.LocalPlayer;
             if (host == null || !ScavPlayer.ClientIdToPlayerDict.ContainsKey(host.playerId)) {
-                Together.log.warn($"[CharSelect] host ready failed: local={(host != null)} id={(host != null ? host.playerId.ToString() : "null")} lobby={ScavPlayer.ClientIdToPlayerDict.Count}");
+                ModLog.Warn(LogDomain.Lobby, $"[CharSelect] host ready failed: local={host != null} id={(host != null ? host.playerId.ToString() : "null")} lobby={ScavPlayer.ClientIdToPlayerDict.Count}");
                 return;
             }
             Server_SetReady(host.playerId, ready, ch);
@@ -569,58 +492,6 @@ public static class CharacterSelectWait {
         ForceCharSelectReadyVisual(PreRunScript.instance);
     }
 
-    public static void TickUi() {
-        if (!Net.IsRunning || !Util.IsInMainMenu()) {
-            return;
-        }
-        PreRunScript prs = PreRunScript.instance;
-        if (prs == null) {
-            return;
-        }
-        EnsureUiHooks(prs);
-
-        if (LateJoinPicking) {
-            ApplyLocalWaitUi();
-            ForceCharSelectReadyVisual(prs);
-            return;
-        }
-
-        // stock Next may show species select without calling StartRun - catch that page
-        if (Net.IsServer && !Waiting && IsSpeciesSelectPageVisible(prs)) {
-            OpenLobbyGate();
-            return;
-        }
-
-        if (!Waiting) {
-            RestoreCharSelectStartStock(prs);
-            return;
-        }
-
-        EnsureHostLobbyGate();
-        SetCharBrowseInteractable(prs, !_speciesLocked);
-        if (_speciesLocked) {
-            EnforceLockedSpecies();
-        }
-        ForceCharSelectReadyVisual(prs);
-    }
-
-    static bool IsSpeciesSelectPageVisible(PreRunScript prs) {
-        Transform charSelect = FindCharSelectRoot(prs);
-        if (charSelect == null || !charSelect.gameObject.activeInHierarchy) {
-            return false;
-        }
-        Transform presets = null;
-        if (prs.runSettingsScreen != null) {
-            presets = FindDeepChild(prs.runSettingsScreen.transform, "Presets");
-        }
-        // species page = char select up and presets put away
-        if (presets != null && presets.gameObject.activeInHierarchy) {
-            return false;
-        }
-        Transform bottom = FindDeepChild(charSelect, "Bottom");
-        return bottom != null && bottom.gameObject.activeInHierarchy;
-    }
-
     public static void Server_SetReady(knetid clientId, bool ready, byte character) {
         if (!Net.IsServer || !Waiting) {
             return;
@@ -629,11 +500,9 @@ public static class CharacterSelectWait {
             return;
         }
         character = (byte)CharacterSpawn.ClampChar(character);
-        // continue: ignore portrait picks - keep the save species
         if (_pendingLoadSave && TryReadSavedCharacter(plr, out byte savedChr)) {
             character = savedChr;
         }
-        // always stamp species from browse/ready so host mesh tracks the portrait.
         plr.selectedCharacter = character;
         if (plr.body != null) {
             NetBody nb = plr.netBody;
@@ -649,7 +518,6 @@ public static class CharacterSelectWait {
         }
         RefreshCountsFromLobby();
         BroadcastProgress();
-        // host confirm loads the tutorial. other players do not ready.
         if (_pendingTutorial && plr.IsHost && ready) {
             HostProceed();
             return;
@@ -666,9 +534,7 @@ public static class CharacterSelectWait {
         List<knetid> stale = null;
         foreach (KeyValuePair<knetid, byte> kv in _selections) {
             if (!ScavPlayer.ClientIdToPlayerDict.ContainsKey(kv.Key)) {
-                if (stale == null) {
-                    stale = new List<knetid>();
-                }
+                stale ??= new List<knetid>();
                 stale.Add(kv.Key);
             }
         }
@@ -724,7 +590,6 @@ public static class CharacterSelectWait {
         RestoreRunRulePanels();
         Multiplayer.DoMultiplayerStatusMessageLog(tutorial ? "Starting tutorial..." : (loadSave ? "Continuing saved run..." : "Starting new run..."));
 
-        // stamp ready picks onto every player BEFORE bodies spawn in the world
         foreach (KeyValuePair<knetid, byte> kv in _selections) {
             if (!ScavPlayer.TryGetPlayerFromClientId(kv.Key, out ScavPlayer plr) || plr == null) {
                 continue;
@@ -788,7 +653,7 @@ public static class CharacterSelectWait {
         if (lockSpecies) {
             plr.selectedCharacter = saved;
         }
-        LiteNetLib.Utils.NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_CharSelectWait);
+        NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_CharSelectWait);
         writer.Put(ReadyCount);
         writer.Put(MaxCount);
         writer.Put(suggested);
@@ -797,290 +662,15 @@ public static class CharacterSelectWait {
     }
 
     static void BroadcastProgress() {
-        LiteNetLib.Utils.NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_CharSelectProgress);
+        NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_CharSelectProgress);
         writer.Put(ReadyCount);
         writer.Put(MaxCount);
         Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
         ForceCharSelectReadyVisual(PreRunScript.instance);
     }
 
-    static void ApplyLocalWaitUi() {
-        PreRunScript prs = PreRunScript.instance;
-        if (prs == null) {
-            return;
-        }
-        EnsureUiHooks(prs);
-        ShowCharSelectHideRunRules(prs);
-        if (prs.tutorialWarning != null) {
-            prs.tutorialWarning.SetActive(false);
-        }
-        SetCharBrowseInteractable(prs, !_speciesLocked);
-        if (_speciesLocked) {
-            EnforceLockedSpecies();
-        }
-        ForceCharSelectReadyVisual(prs);
-    }
-
-    static void SetCharBrowseInteractable(PreRunScript prs, bool interactable) {
-        if (prs == null || prs.charImages == null) {
-            return;
-        }
-        for (int i = 0; i < prs.charImages.Count; i++) {
-            if (prs.charImages[i] == null) {
-                continue;
-            }
-            Button btn = prs.charImages[i].GetComponent<Button>();
-            if (btn == null) {
-                continue;
-            }
-            if (!interactable) {
-                btn.interactable = false;
-                continue;
-            }
-            // restore stock unlock gate
-            if (i != 0 && PlayerPrefs.GetInt("wonchar" + (i - 1)) == 0) {
-                btn.interactable = false;
-            } else {
-                btn.interactable = true;
-            }
-        }
-    }
-
-    static Transform FindDeepChild(Transform parent, string name) {
-        if (parent == null) {
-            return null;
-        }
-        if (parent.name == name) {
-            return parent;
-        }
-        for (int i = 0; i < parent.childCount; i++) {
-            Transform found = FindDeepChild(parent.GetChild(i), name);
-            if (found != null) {
-                return found;
-            }
-        }
-        return null;
-    }
-
-    static Transform FindCharSelectRoot(PreRunScript prs) {
-        if (prs == null) {
-            return null;
-        }
-        if (prs.charImages != null) {
-            for (int i = 0; i < prs.charImages.Count; i++) {
-                if (prs.charImages[i] == null) {
-                    continue;
-                }
-                Transform t = prs.charImages[i].transform;
-                while (t != null) {
-                    if (t.name == "CharSelect") {
-                        return t;
-                    }
-                    if (prs.runSettingsScreen != null && t == prs.runSettingsScreen.transform) {
-                        break;
-                    }
-                    t = t.parent;
-                }
-            }
-        }
-        if (prs.charSelectName != null) {
-            Transform t = prs.charSelectName.transform;
-            while (t != null) {
-                if (t.name == "CharSelect") {
-                    return t;
-                }
-                t = t.parent;
-            }
-        }
-        if (prs.runSettingsScreen != null) {
-            return FindDeepChild(prs.runSettingsScreen.transform, "CharSelect");
-        }
-        return null;
-    }
-
-    static void HideCharSelect() {
-        PreRunScript prs = PreRunScript.instance;
-        if (prs == null) {
-            return;
-        }
-        Transform charSelect = FindCharSelectRoot(prs);
-        if (charSelect != null) {
-            charSelect.gameObject.SetActive(false);
-        }
-    }
-
-    static void ShowCharSelectHideRunRules(PreRunScript prs) {
-        if (prs.runSettingsScreen != null) {
-            if (!prs.runSettingsScreen.activeSelf) {
-                _openedRunSettings = true;
-            }
-            prs.runSettingsScreen.SetActive(true);
-        }
-        Transform charSelect = FindCharSelectRoot(prs);
-        if (charSelect != null) {
-            charSelect.gameObject.SetActive(true);
-            Transform bottom = FindDeepChild(charSelect, "Bottom");
-            if (bottom != null) {
-                bottom.gameObject.SetActive(true);
-            }
-        }
-        if (prs.runSettingsScreen == null) {
-            return;
-        }
-        Transform root = prs.runSettingsScreen.transform;
-        for (int i = 0; i < root.childCount; i++) {
-            Transform child = root.GetChild(i);
-            if (child == null) {
-                continue;
-            }
-            if (charSelect != null && child == charSelect) {
-                continue;
-            }
-            // presets + custom settings + outline (outline can eat raycasts over Start)
-            if (child.name != "Presets" && child.name != "CustomSettings" && child.name != "SelectOutline") {
-                continue;
-            }
-            if (child.gameObject.activeSelf) {
-                child.gameObject.SetActive(false);
-                if (!_hiddenRunRulePanels.Contains(child.gameObject)) {
-                    _hiddenRunRulePanels.Add(child.gameObject);
-                }
-            }
-        }
-    }
-
-    static void RestoreRunRulePanels() {
-        for (int i = 0; i < _hiddenRunRulePanels.Count; i++) {
-            if (_hiddenRunRulePanels[i] != null) {
-                _hiddenRunRulePanels[i].SetActive(true);
-            }
-        }
-        _hiddenRunRulePanels.Clear();
-    }
-
-    static Button FindCharSelectStartButton(PreRunScript prs) {
-        if (_charSelectStart != null) {
-            return _charSelectStart;
-        }
-        Transform charSelect = FindCharSelectRoot(prs);
-        if (charSelect == null) {
-            return null;
-        }
-        Transform bottom = FindDeepChild(charSelect, "Bottom");
-        if (bottom != null) {
-            Transform startTf = FindDeepChild(bottom, "Start");
-            if (startTf != null) {
-                return startTf.GetComponent<Button>();
-            }
-        }
-        Transform anyStart = FindDeepChild(charSelect, "Start");
-        return anyStart != null ? anyStart.GetComponent<Button>() : null;
-    }
-
-    static void ForceCharSelectReadyVisual(PreRunScript prs) {
-        if (prs == null) {
-            return;
-        }
-        Button start = FindCharSelectStartButton(prs);
-        if (start == null) {
-            return;
-        }
-        if (!start.gameObject.activeSelf) {
-            start.gameObject.SetActive(true);
-        }
-        if (start.transform.parent != null && !start.transform.parent.gameObject.activeSelf) {
-            start.transform.parent.gameObject.SetActive(true);
-        }
-
-        RememberButton(start);
-        start.enabled = true;
-        start.interactable = true;
-
-        // clear any canvas-group blocks on the chain
-        Transform t = start.transform;
-        while (t != null) {
-            CanvasGroup cg = t.GetComponent<CanvasGroup>();
-            if (cg != null) {
-                cg.interactable = true;
-                cg.blocksRaycasts = true;
-                if (cg.alpha < 0.01f) {
-                    cg.alpha = 1f;
-                }
-            }
-            if (prs.runSettingsScreen != null && t == prs.runSettingsScreen.transform) {
-                break;
-            }
-            t = t.parent;
-        }
-
-        string text = ReadyButtonText();
-        TextMeshProUGUI[] labels = start.GetComponentsInChildren<TextMeshProUGUI>(true);
-        for (int i = 0; i < labels.Length; i++) {
-            if (labels[i] != null) {
-                labels[i].text = text;
-                labels[i].raycastTarget = false;
-            }
-        }
-    }
-
-    static void RestoreCharSelectStartStock(PreRunScript prs) {
-        if (_readyButtons.Count > 0) {
-            RestoreReadyButtons();
-        }
-        Button start = FindCharSelectStartButton(prs);
-        if (start == null) {
-            return;
-        }
-        start.enabled = true;
-        start.interactable = true;
-    }
-
-    static void RememberButton(Button button) {
-        if (button == null) {
-            return;
-        }
-        for (int i = 0; i < _readyButtons.Count; i++) {
-            if (_readyButtons[i].button == button) {
-                return;
-            }
-        }
-        TextMeshProUGUI label = button.GetComponentInChildren<TextMeshProUGUI>(true);
-        _readyButtons.Add(new ReadyButton {
-            button = button,
-            label = label,
-            originalText = label != null ? label.text : "Start",
-        });
-    }
-
-    static string ReadyButtonText() {
-        if (LateJoinPicking) {
-            return LocalConfirmed ? "Joining..." : "Join";
-        }
-        if (_pendingTutorial) {
-            return "Start";
-        }
-        if (LocalConfirmed) {
-            return $"Ready [{ReadyCount}/{MaxCount}]";
-        }
-        return $"Ready up [{ReadyCount}/{MaxCount}]";
-    }
-
-    static void RestoreReadyButtons() {
-        for (int i = 0; i < _readyButtons.Count; i++) {
-            ReadyButton rb = _readyButtons[i];
-            if (rb.label != null && rb.originalText != null) {
-                rb.label.text = rb.originalText;
-            }
-            if (rb.button != null) {
-                rb.button.enabled = true;
-                rb.button.interactable = true;
-            }
-        }
-        _readyButtons.Clear();
-    }
-
     [ServerReceiver((byte)NetmsgId.SERVER_SelectChar)]
-    static void Server_SelectChar(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+    static void Server_SelectChar(knetid clientId, NetDataReader reader) {
         bool ready = true;
         int ch;
         if (reader.AvailableBytes >= 5) {
@@ -1100,7 +690,7 @@ public static class CharacterSelectWait {
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_CharSelectWait)]
-    static void Client_CharSelectWait(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+    static void Client_CharSelectWait(knetid _, NetDataReader reader) {
         reader.Get(out int ready);
         reader.Get(out int max);
         int suggested = 0;
@@ -1115,33 +705,15 @@ public static class CharacterSelectWait {
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_CharSelectProgress)]
-    static void Client_CharSelectProgress(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+    static void Client_CharSelectProgress(knetid _, NetDataReader reader) {
         reader.Get(out int ready);
         reader.Get(out int max);
         Client_UpdateProgress(ready, max);
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_LateJoinCharSelect)]
-    static void Client_LateJoinCharSelect(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+    static void Client_LateJoinCharSelect(knetid _, NetDataReader reader) {
         Client_EnterLateJoinPick();
-    }
-}
-
-[HarmonyPatch(typeof(PreRunScript), "Start")]
-static class PreRunScript_Start_CharSelectWaitHooksPatch {
-    static void Postfix(PreRunScript __instance) {
-        if (!Net.IsRunning) {
-            // still install; TickUi no-ops until net is up, hooks ready when lobby starts
-        }
-        CharacterSelectWait.EnsureUiHooks(__instance);
-    }
-}
-
-[HarmonyPatch(typeof(PreRunScript), "Update")]
-static class PreRunScript_Update_CharSelectWaitPatch {
-    static void Postfix(PreRunScript __instance) {
-        CharacterSelectWait.EnsureUiHooks(__instance);
-        CharacterSelectWait.TickUi();
     }
 }
 #endif

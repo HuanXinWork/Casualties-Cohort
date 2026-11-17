@@ -23,6 +23,8 @@ namespace Together.Diagnostics {
         UI        = 1u << 13,
         Security  = 1u << 14,
         Interop   = 1u << 15,
+        Bootstrap = Core,
+        ObjectSync= Item | World,
         All       = 0xFFFFFFFFu,
     }
 

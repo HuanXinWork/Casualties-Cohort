@@ -1,34 +1,23 @@
-using CasualtiesTogetherUtils;
-using HarmonyLib;
-using LiteNetLib;
-using System.Collections;
+using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
 using System.Reflection;
-using System.Reflection.Emit;
-using Unity.Collections;
+using CasualtiesTogetherUtils;
+using LiteNetLib;
+using LiteNetLib.Utils;
+using Together.Diagnostics;
+using Together.MpConstants;
 using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.Tilemaps;
 
 namespace Together;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/// <summary>
+/// 多人加热/制冷源重写组件：仅由服务端统一计算半径内所有玩家与 NPC 躯体的温度插值，再经医疗同步下发，避免客户端本地预测与房主快照拉扯。
+/// </summary>
 public class HeaterMultiplayerRewrite : MonoBehaviour {
+    private const float FallbackRadius = 10f;
+    private const float TickInterval = 0.5f;
+
     Heater heater;
 
     void Awake() {
@@ -36,218 +25,164 @@ public class HeaterMultiplayerRewrite : MonoBehaviour {
     }
 
     void Update() {
-        //OG: Heater.OnWillRenderObject - all bodies in radius, host-authoritative temperature.
-        // covers: spaceheater / campfire / lifepod heater+AC / CrystalTemperature / any prefab Heater.
-        // body.temperature is medical-synced; clients must not mutate it or host snaps overwrite them.
-        // host sim range already stamps every player's 3x3, so far-client heaters still Update here.
-        if (Net.IsRunning && !Net.IsServer) {
+        if (Net.IsRunning && !Net.IsServer)
             return;
-        }
 
         if (heater == null) {
             heater = GetComponent<Heater>();
-            if (heater == null) {
+            if (heater == null)
                 return;
-            }
         }
 
-        // crystalTemperature / sync AddComponent can leave maxDistance at 0; vanilla never cools then.
         float radius = heater.maxDistance;
-        if (radius <= 0.01f) {
-            radius = 10f;
-        }
+        if (radius <= 0.01f)
+            radius = FallbackRadius;
 
-        if (heater.enabled && Time.time - heater.lastTime > 0.5f) {
-            heater.lastTime = (Time.time);
+        if (heater.enabled && Time.time - heater.lastTime > TickInterval) {
+            heater.lastTime = Time.time;
 
-            foreach (var nb in NetBody.GetBodiesInRadius(heater.transform.position, radius)) {
-                var body = nb.body;
-                if (body == null) {
+            foreach (NetBody nb in NetBody.GetBodiesInRadius(heater.transform.position, radius)) {
+                Body body = nb.body;
+                if (body == null)
                     continue;
-                }
 
-                if (
-                    ((heater.isHeater && body.temperature < heater.desiredTemp) || (!heater.isHeater && body.temperature > heater.desiredTemp))
-                ) {
+                if ((heater.isHeater && body.temperature < heater.desiredTemp)
+                    || (!heater.isHeater && body.temperature > heater.desiredTemp)) {
                     body.temperature = Mathf.Lerp(body.temperature, heater.desiredTemp, heater.tempLerpStrength);
                 }
             }
         }
     }
-
 }
 
-
-
-// this can be used on dead players
+/// <summary>
+/// 多人尸体目击与破坏情绪惩罚重写组件（同时兼容场景遗骸与阵亡玩家躯体）。
+/// </summary>
 public class CorpseScriptMultiplayerRewrite : MonoBehaviour {
-
     public bool animalCorpse = true;
     public byte corpseSpriteIndex = 0;
 
     public HashSet<NetBody> people_that_seen_it = new();
 
-    //OG: CorpseScript.OnWillRenderObject   V5t4   
     public const float SEE_RADIUS = 7f;
+    private const float BreakWitnessRadius = 28f;
+    private const float AttackerNearSqr = 10f * 10f;
 
     void Awake() {
         if (TryGetComponent<CorpseScript>(out var corpse)) {
             animalCorpse = corpse.animalCorpse;
-            corpseSpriteIndex = (byte)System.Array.IndexOf(corpse.startSprites, corpse.GetComponent<SpriteRenderer>().sprite);
-        } else if (TryGetComponent<Body>(out var body)) {
+            corpseSpriteIndex = (byte)Array.IndexOf(corpse.startSprites, corpse.GetComponent<SpriteRenderer>().sprite);
+        } else if (TryGetComponent<Body>(out _)) {
             animalCorpse = false;
         }
     }
 
     void Start() {
-        InvokeRepeating(nameof(SlowUpdate), UnityEngine.Random.value * 2, 0.1f);
+        InvokeRepeating(nameof(SlowUpdate), UnityEngine.Random.value * 2f, 0.1f);
     }
 
     void SlowUpdate() {
-        //OG: CorpseScript.OnWillRenderObject   V5t4   the player seeing part
+        if (animalCorpse)
+            return;
 
-        if (!animalCorpse) {
-            // if this script is on a dead player, and player got revived remove this component 
-            if (TryGetComponent<NetBody>(out var npc)) {
-
-                if (npc.body.alive) {
-                    Destroy(this);
-                    return;
-                }
-
-                if (npc.timeHasBeenDead < 2) {
-                    return;
-                }
+        if (TryGetComponent<NetBody>(out var npc)) {
+            if (npc.body.alive) {
+                Destroy(this);
+                return;
             }
+            if (npc.timeHasBeenDead < 2)
+                return;
+        }
 
-            foreach (var plr in ScavPlayer.GetPlayerBodiesInRadius(transform.position, SEE_RADIUS)) {
-                if (!people_that_seen_it.Contains(plr)) {
-                    people_that_seen_it.Add(plr);
+        foreach (NetBody plr in ScavPlayer.GetPlayerBodiesInRadius(transform.position, SEE_RADIUS)) {
+            if (!people_that_seen_it.Add(plr))
+                continue;
 
-#if !RELEASE
-                    log.l($"{plr} has seen corpse {npc} at {((Vector2Int16)((Vector2)transform.position))}");
-#endif
-
-                    if (
-                        !plr.IsLocal || // prevent double debuff because i left original method doing its thing
-                        npc != null // but always do this for player corpses
-                    ) {
-
-                        plr.body.happiness -= 3.5f * plr.body.desensitizedMult;
-                        plr.body.sicknessAmount += 6f * plr.body.desensitizedMult;
-                        plr.body.desensitizedMult *= 0.9f;
-                        plr.body.corpsesSeen++;
-                        if (plr.body.totalHappiness < -55f) {
-                            plr.body.talker.Talk(Locale.GetCharacter("seecorpsesuicidal"), null, force: true);
-                        } else if (plr.body.corpsesSeen < 9) {
-                            plr.body.talker.Talk(Locale.GetCharacter("seecorpse"));
-                            plr.body.eyeScareTime = 4f;
-                        } else {
-                            plr.body.talker.Talk(Locale.GetCharacter("seecorpsedesensitized"));
-                        }
-                    }
-
+            if (!plr.IsLocal || npc != null) {
+                plr.body.happiness -= 3.5f * plr.body.desensitizedMult;
+                plr.body.sicknessAmount += 6f * plr.body.desensitizedMult;
+                plr.body.desensitizedMult *= 0.9f;
+                plr.body.corpsesSeen++;
+                if (plr.body.totalHappiness < -55f) {
+                    plr.body.talker.Talk(Locale.GetCharacter("seecorpsesuicidal"), null, force: true);
+                } else if (plr.body.corpsesSeen < 9) {
+                    plr.body.talker.Talk(Locale.GetCharacter("seecorpse"));
+                    plr.body.eyeScareTime = 4f;
+                } else {
+                    plr.body.talker.Talk(Locale.GetCharacter("seecorpsedesensitized"));
                 }
             }
         }
-
-
     }
 
     private void OnWillRenderObject() {
-        //OG: CorpseScript.OnWillRenderObject  V5t4   the staring part
-
-        foreach (var plr in ScavPlayer.GetPlayerBodiesInRadius(transform.position, SEE_RADIUS)) {
-
+        foreach (NetBody plr in ScavPlayer.GetPlayerBodiesInRadius(transform.position, SEE_RADIUS)) {
             plr.body.overrideLookTime = 0.5f;
             plr.body.overrideLookPos = transform.position;
             if (plr.body.corpsesSeen < 9) {
                 plr.body.eyeScareTime = 0.5f;
             }
-
         }
-
     }
-
 
     void OnDestroy() {
-        if (animalCorpse) return;
-        if (gameObject && gameObject.scene.isLoaded && Util.IsWorldGenerated() && (!TryGetComponent(out BuildingEntity b) || b.GetHealth() <= 0f)) {
-            var nearest = NetBody.GetNearestBody(transform.position, true, true);
-            if (nearest.Item2 > 10 * 10) return;
+        if (animalCorpse)
+            return;
+        if (!gameObject || !gameObject.scene.isLoaded || !Util.IsWorldGenerated())
+            return;
+        if (TryGetComponent(out BuildingEntity b) && b.GetHealth() > 0f)
+            return;
 
-#if TESTING
-            log.l($"CORPSE BREAK APPLY MOOD DEBUFF");
-#endif
+        var nearest = NetBody.GetNearestBody(transform.position, true, true);
+        if (nearest.Item1 == null || nearest.Item2 > AttackerNearSqr)
+            return;
 
-            foreach (var witness in ScavPlayer.GetPlayerBodiesInRadius(transform.position, 28)) {
-                if (Net.IsServer && witness.body.IsBodyLocal()) {
-                    continue;
-                }
-                var is_attacker = witness.body.attackCooldown > 0f;
-                if (witness.body.conscious) {
+        foreach (NetBody witness in ScavPlayer.GetPlayerBodiesInRadius(transform.position, BreakWitnessRadius)) {
+            if (Net.IsServer && witness.body.IsBodyLocal())
+                continue;
+            if (!witness.body.conscious)
+                continue;
 
-#if TESTING
-                    log.l($"CORPSE BREAK APPLY MOOD DEBUFF -> {witness}");
-#endif
-
-                    var oldhapines = witness.body.happiness;
-
-                    //OG: CorpseScript.OnDestroy V510
-                    var total_damage = 5f;
-
-                    // check if the witness actually didnt see em
-                    if (!Util.AccurateRaycastInteractionCheckObstruction(nearest.Item1.body, witness.body, false)) {
-                        total_damage *= 0.5f;
-                    }
-
-                    witness.body.happiness -= total_damage * witness.body.desensitizedMult;
-                    witness.body.eyeScareTime = 5f;
-
-                    if (is_attacker) {
-                        witness.body.talker.Talk(Locale.GetCharacter("breakcorpse"));
-                    }
-                }
+            bool isAttacker = witness.body.attackCooldown > 0f;
+            float totalDamage = 5f;
+            if (!Util.AccurateRaycastInteractionCheckObstruction(nearest.Item1.body, witness.body, false)) {
+                totalDamage *= 0.5f;
             }
 
-
+            witness.body.happiness -= totalDamage * witness.body.desensitizedMult;
+            witness.body.eyeScareTime = 5f;
+            if (isAttacker) {
+                witness.body.talker.Talk(Locale.GetCharacter("breakcorpse"));
+            }
         }
     }
-
-
 }
 
-
-
-
-
-
+/// <summary>
+/// 当实体处于房主镜头视野外、但位于远端玩家可视半径内时，代为在服务端驱动原版依赖 <c>OnWillRenderObject</c> 的 AI 与机关更新。
+/// </summary>
 public class OnWillRenderObject_ForceForMPComponent : MonoBehaviour {
-
     public SyncInfoGameObjectTracker tracker => GetComponent<SyncInfoGameObjectTracker>();
     public Renderer renderer => GetComponent<Renderer>();
     public MonoBehaviour target;
+
     Renderer[] _childRenderers;
     MethodInfo _willRender;
 
     void CacheRenderers() {
-        if ((target == null) || ((_childRenderers != null) && (_childRenderers.Length > 0))) {
+        if (target == null || (_childRenderers != null && _childRenderers.Length > 0))
             return;
-        }
-        // traders put sprites on children. root-only lookup never forced combat.
         _childRenderers = target.GetComponentsInChildren<Renderer>(true);
     }
 
     bool AnyRendererVisible() {
         CacheRenderers();
-        if ((_childRenderers == null) || (_childRenderers.Length == 0)) {
+        if (_childRenderers == null || _childRenderers.Length == 0)
             return false;
-        }
         for (int i = 0; i < _childRenderers.Length; i++) {
             Renderer r = _childRenderers[i];
-            if ((r != null) && r.isVisible) {
+            if (r != null && r.isVisible)
                 return true;
-            }
         }
         return false;
     }
@@ -264,273 +199,176 @@ public class OnWillRenderObject_ForceForMPComponent : MonoBehaviour {
 #endif
             return;
         }
+
         try {
-            if ((tracker == null) || (target == null) || !tracker.isVisible) {
+            if (tracker == null || target == null || !tracker.isVisible)
                 return;
-            }
-            // host camera already driving OnWillRender. don't double-tick ramp/swing.
-            if (AnyRendererVisible()) {
+            // 若房主镜头本身可见则原版会自动调用 OnWillRenderObject，此处跳过以防双倍步进
+            if (AnyRendererVisible())
                 return;
+            if (_willRender == null) {
+                _willRender = target.GetType().GetMethod(
+                    "OnWillRenderObject",
+                    BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.FlattenHierarchy);
             }
             if (_willRender == null) {
-                _willRender = target.GetType().GetMethod("OnWillRenderObject", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.FlattenHierarchy);
-            }
-            if (_willRender == null) {
-                throw new System.Exception($"OnWillRenderObject wasnt found wtf {target.GetType()}");
+                ModLog.Error($"OnWillRenderObject method not found on {target.GetType()}", LogDomain.World);
+                enabled = false;
+                return;
             }
             _willRender.Invoke(target, null);
-        } catch (System.Exception e) {
-            Plugin.log.LogError($"Failed force OnWillRenderObject for {target?.name}\n{e}");
+        } catch (Exception ex) {
+            ModLog.Exception(LogDomain.World, $"ForceOnWillRenderObject({target?.name})", ex);
         }
     }
 }
 
-
-
-
-public class TrackerBuildingEntityBackgroundified : UnityEngine.MonoBehaviour {
-
+public class TrackerBuildingEntityBackgroundified : MonoBehaviour {
     public static readonly List<TrackerBuildingEntityBackgroundified> all_instances = new();
+
     void OnEnable() => all_instances.Add(this);
     void OnDisable() => all_instances.Remove(this);
 
     public bool is_backgroundified = false;
     public bool is_a_background_tilemap = false;
-
 }
 
-
-
-public class BaseSpecialStaticEntityTracker : UnityEngine.MonoBehaviour {
+/// <summary>
+/// 静态场景特殊实体（藤蔓绳索、洞穴蜱虫等）按视距懒同步基类。
+/// </summary>
+public class BaseSpecialStaticEntityTracker : MonoBehaviour {
     protected byte REQ = (byte)NetmsgId.IsThereASandvine__;
 
-    Vector2 pos => transform.position;
     public bool was_synced = false;
-
-    float checktimer = 1;
+    float checktimer = 1f;
 
     void Start() {
         checktimer = UnityEngine.Random.value;
     }
 
-
     void FixedUpdate() {
-
         if (!Net.IsRunning) {
-            GameObject.Destroy(this);
+            Destroy(this);
             return;
         }
-        if (was_synced && !WantsAnotherPass()) {
+        if (was_synced && !WantsAnotherPass())
             return;
-        } else {
 
-            checktimer -= Time.fixedDeltaTime;
+        checktimer -= Time.fixedDeltaTime;
+        if (checktimer >= 0f)
+            return;
 
-            if (checktimer < 0) {
-                checktimer = UnityEngine.Random.value * 0.4f;
+        checktimer = UnityEngine.Random.value * 0.4f;
+        if (!SharedMain.LocalWorldIsGenerated || SharedMain.LastWorldgenFinishTime < 5)
+            return;
 
-                if (!SharedMain.LocalWorldIsGenerated) { return; }
-
-                if (SharedMain.LastWorldgenFinishTime < 5) { return; }
-
-                if (Net.IsClient) {
-                    if (ClientMain.ServerIsGeneratingWorld) {
-                        return;
-                    }
-
-                    if (!CheckDist(PlayerCamera.main.transform.position)) { // if i cant see it ignore it
-                        return;
-                    }
-                } else {
-                    ScavPlayer closest_plr = null;
-                    foreach (var plr in ScavPlayer.BodyToPlayerDict.Values) {
-                        if (plr.ServerPlayerState.is_loaded_in && CheckDist(plr.pos)) { // if someone sees it log it
-                            closest_plr = plr;
-                            break;
-                        }
-                    }
-                    if (closest_plr == null) { // so if no one sees it, ignore it 
-                        return;
-                    }
-                }
-
-            } else {
+        if (Net.IsClient) {
+            if (ClientMain.ServerIsGeneratingWorld)
                 return;
+            if (!CheckDist(PlayerCamera.main.transform.position))
+                return;
+        } else {
+            ScavPlayer closestPlr = null;
+            foreach (ScavPlayer plr in ScavPlayer.BodyToPlayerDict.Values) {
+                if (plr.ServerPlayerState.is_loaded_in && CheckDist(plr.pos)) {
+                    closestPlr = plr;
+                    break;
+                }
             }
-
-
-
-
-
-
-
-            if (Net.IsClient) {
-
-                var writer = Net.CreateWriter(REQ);
-
-                writer.Put((Vector2)transform.position);
-
-                Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
-
-                // WRITER END;
-
-            } else {
-                Server_Announce();
-            }
-            was_synced = !WantsAnotherPass();
+            if (closestPlr == null)
+                return;
         }
+
+        if (Net.IsClient) {
+            NetDataWriter writer = Net.CreateWriter(REQ);
+            writer.Put((Vector2)transform.position);
+            Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
+        } else {
+            Server_Announce();
+        }
+        was_synced = !WantsAnotherPass();
     }
 
-    // climbables stay awake until every loaded client has the rope. one announce
-    // used to set was_synced and a late joiner never got it unless someone climbed.
     protected virtual bool WantsAnotherPass() => false;
 
-
-    virtual public bool CheckDist(Vector2 pos) {
-        return KM.DistanceCheck_PreSqr(pos, this.transform.position, 64 * 64);
+    public virtual bool CheckDist(Vector2 pos) {
+        return KM.DistanceCheck_PreSqr(pos, transform.position, GameplayRanges.SimulationKeepRadiusSqr);
     }
 
-    virtual public void Server_Announce() {
+    public virtual void Server_Announce() {
         if (!was_synced) {
             was_synced = true;
         }
     }
 
     public static T GetAtPos<T>(Vector2 pos) where T : BaseSpecialStaticEntityTracker {
-        foreach (var item in UnityEngine.Object.FindObjectsOfType<T>()) {
-            if ((Vector2)(item.transform.position) == (Vector2)(pos)) {
+        foreach (T item in UnityEngine.Object.FindObjectsOfType<T>()) {
+            if ((Vector2)item.transform.position == pos) {
                 return item;
             }
         }
         return null;
     }
-
 }
 
-
-
-
+/// <summary>
+/// 可攀爬绳索/藤蔓/梯子几何节点与销毁同步追踪器。
+/// </summary>
 public class TrackerClimbableEntity : BaseSpecialStaticEntityTracker {
-    public const string sandvine_new_id = "Special/sandvinerope";// originally "sandvine";
+    public const string sandvine_new_id = "Special/sandvinerope";
     public const string climbingropeextended_id = "climbingropeextended";
     public const string mushroomrope_new_id = "Special/mushroomrope";
-    public const string veinloop_new_id = "Special/veinloop"; // fullgame biome climbable
-    public const string spicevine_id = "spicevine"; // fullgame biome 8 plant climbable
-    public const string spicevineceiling_id = "spicevineceiling"; // same biome; prefab id was also "spicevine"
+    public const string veinloop_new_id = "Special/veinloop";
+    public const string spicevine_id = "spicevine";
+    public const string spicevineceiling_id = "spicevineceiling";
 
     public string og_id = null;
-
-#if (!RELEASE) && false
-    void OnGUI() {
-        if (log.verbose) {
-
-            var ogfont = GUI.skin.label.fontSize;
-
-            var pos = (Vector2)Camera.main.WorldToScreenPoint(transform.position);
-            pos = new Vector2(pos.x, Screen.height - pos.y);
-
-            if (pos.x > 0 && pos.y > 0 && pos.x < Screen.width && pos.y < Screen.width) {
-
-                const float bsize = 17;
-                const float elsize = 13;
-
-                float y = 0;
-
-                GUI.skin.label.normal.textColor = UnityEngine.Color.white;
-
-                GUI.skin.label.fontSize = 10;
-                GUI.Label(new Rect(pos.x, pos.y + y, 400, bsize), "pos: " + pos);
-                y += elsize;
-                GUI.Label(new Rect(pos.x, pos.y + y, 400, bsize), "was_synced: " + was_synced);
-                y += elsize;
-
-                var climbable = GetComponent<Climbable>();
-                if (climbable.points.Count > 0) {
-                    GUI.Label(new Rect(pos.x, pos.y + y, 400, bsize), "downwardsVelocity: " + climbable.downwardsVelocity);
-                    y += elsize;
-                    GUI.Label(new Rect(pos.x, pos.y + y, 400, bsize), "point[0]: " + climbable.points[0]);
-                    y += elsize;
-                    GUI.Label(new Rect(pos.x, pos.y + y, 400, bsize), "point[1]: " + climbable.points[1]);
-                    y += elsize;
-                } else {
-                }
-
-                GUI.Label(new Rect(pos.x, pos.y + y, 400, bsize), "point.Count: " + climbable.points.Count);
-                y += elsize;
-            }
-
-            GUI.skin.label.normal.textColor = UnityEngine.Color.white;
-            GUI.skin.label.fontSize = ogfont;
-        }
-    }
-#endif
-
 
     void Awake() {
         REQ = (byte)NetmsgId.SERVER_IsThereARope__;
     }
 
-    /*
-        sandvinerope = sandvine  (mod patches this into "sandvinerope")
-        climbingropeextended = climbingropeextended
-        mushroomrope = mushroomrope
-        veinloop = veinloop (fullgame; same stretchy SpriteRenderer rope layout)
-        spicevine / spicevineceiling = fullgame biome plants (localScale flip only)
-    */
-
-
     public bool is_ladder => GetComponent<BuildingEntity>().id == "ladder";
     public bool is_sandvine => GetComponent<BuildingEntity>().id == sandvine_new_id;
     public bool is_mushroomrope => GetComponent<BuildingEntity>().id == mushroomrope_new_id;
     public bool is_veinloop => GetComponent<BuildingEntity>().id == veinloop_new_id;
+
     public bool is_spicevine {
         get {
             string id = GetComponent<BuildingEntity>().id;
             return id == spicevine_id || id == spicevineceiling_id;
         }
     }
-    // stretchy SpriteRenderer.size ropes (+ ladder) share the same scale/size apply path
+
     public bool is_mushroomrope_or_sandvine => is_sandvine || is_mushroomrope || is_veinloop || is_ladder;
     public bool is_climbingropeextended => GetComponent<BuildingEntity>().id == climbingropeextended_id;
     public bool is_known_climbable => is_ladder || is_sandvine || is_mushroomrope || is_veinloop || is_climbingropeextended || is_spicevine;
 
-
     Vector2 spritescale {
         get {
-            if (is_mushroomrope_or_sandvine || is_spicevine) {
+            if (is_mushroomrope_or_sandvine || is_spicevine)
                 return transform.localScale;
-            }
-            if (is_climbingropeextended) {
+            if (is_climbingropeextended)
                 return transform.GetChild(0).localScale;
-            }
             return Vector2.one;
         }
         set {
-            if (is_mushroomrope_or_sandvine || is_spicevine) {
+            if (is_mushroomrope_or_sandvine || is_spicevine)
                 transform.localScale = value;
-            }
-            if (is_climbingropeextended) {
+            if (is_climbingropeextended)
                 transform.GetChild(0).localScale = value;
-            }
         }
     }
+
     float spritey {
         get {
-            if (is_mushroomrope_or_sandvine) {
+            if (is_mushroomrope_or_sandvine)
                 return GetComponent<SpriteRenderer>().size.y;
-            }
-            if (is_climbingropeextended || is_spicevine) {
-                return 100;
-            }
-            return 100;
+            return 100f;
         }
-
         set {
             if (is_mushroomrope_or_sandvine) {
                 GetComponent<SpriteRenderer>().size = new Vector2(2.5f, value);
-            }
-            if (is_climbingropeextended || is_spicevine) {
-                // spicevine is a fixed plant mesh - flip via localScale only
             }
         }
     }
@@ -539,12 +377,11 @@ public class TrackerClimbableEntity : BaseSpecialStaticEntityTracker {
     public bool announce_reliable = true;
     readonly HashSet<ScavPlayer> _told = new();
     SpriteRenderer[] _sprites;
-    const float RopeSeeDistSqr = 64f * 64f;
 
     protected override bool WantsAnotherPass() {
         if (!Net.IsServer)
             return false;
-        var climbable = GetComponent<Climbable>();
+        Climbable climbable = GetComponent<Climbable>();
         if (climbable == null || climbable.points == null || climbable.points.Count < 2)
             return true;
         return HasUntoldClient();
@@ -564,17 +401,16 @@ public class TrackerClimbableEntity : BaseSpecialStaticEntityTracker {
     }
 
     public override void Server_Announce() {
-        var climbable = GetComponent<Climbable>();
+        Climbable climbable = GetComponent<Climbable>();
         if (climbable == null || climbable.points == null || climbable.points.Count < 2) {
             if (climbable != null && !isPointless && climbable.points != null && climbable.points.Count == 0) {
-                log.error($"Rope is pointless {NetObjectRegistry.DebugStringGameObject(gameObject)}  {(Vector2)climbable.transform.position}");
+                ModLog.Error($"Rope has 0 points: {NetObjectRegistry.DebugStringGameObject(gameObject)} at {(Vector2)climbable.transform.position}", LogDomain.World);
                 isPointless = true;
             }
             was_synced = false;
             return;
         }
 
-        // climbing forces a refresh. standing nearby only tells clients who missed the earlier pass.
         bool refresh = !announce_reliable;
         announce_reliable = true;
 
@@ -595,59 +431,47 @@ public class TrackerClimbableEntity : BaseSpecialStaticEntityTracker {
             return;
         }
 
-        var writer = Net.CreateWriter(NetmsgId.CLIENT_ThereIsARope____);
-
+        NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_ThereIsARope____);
         writer.Put((Vector2)climbable.transform.position);
         writer.Put(climbable.GetComponent<BuildingEntity>().id, true);
         writer.Put(climbable.points.ToArray());
-        writer.Put((float)climbable.downwardsVelocity);
-
+        writer.Put(climbable.downwardsVelocity);
         writer.Put(spritescale);
         writer.Put(spritey);
-
         Net.Server_SendToClients(refresh ? DeliveryMethod.Unreliable : DeliveryMethod.ReliableUnordered, writer, clientIds: targets);
 
         was_synced = !HasUntoldClient();
     }
 
-    // ropes are not normal buildings, so a host explode never reaches the client copy.
-    // the client explosion is visual only and leaves the vine standing.
     void OnDestroy() {
         if (!Net.IsServer || !Util.IsWorldGenerated())
             return;
-        var world = WorldGeneration.world;
+        WorldGeneration world = WorldGeneration.world;
         if (world == null || world.generatingWorld)
             return;
-        var build = GetComponent<BuildingEntity>();
+        BuildingEntity build = GetComponent<BuildingEntity>();
         if (build != null && build.GetHealth() > 0.5f)
             return;
-        var writer = Net.CreateWriter(NetmsgId.CLIENT_NoTheresNoRopeFuckOff);
+        NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_NoTheresNoRopeFuckOff);
         writer.Put((Vector2)transform.position);
         Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
     }
 
-
-
     public override bool CheckDist(Vector2 pos) {
-
-
-        var climbable = GetComponent<Climbable>();
-        if (climbable == null) { // it may be sandvine begining and end decorations, i dont need to sync those
-            Object.Destroy(this);
+        Climbable climbable = GetComponent<Climbable>();
+        if (climbable == null) {
+            Destroy(this);
             return false;
         }
         if (NearSprite(pos))
             return true;
-        if (climbable.points == null || climbable.points.Count == 0) {
-            if (Net.IsClient) { // to force it to request syncinfo
-                return true;
-            }
-            return false;
-        }
+        if (climbable.points == null || climbable.points.Count == 0)
+            return Net.IsClient;
+
         int last = climbable.points.Count - 1;
         for (int i = 0; i < last; i++) {
-            var closest = KM.v2getClosestPointOnLine(climbable.points[i], climbable.points[i + 1], pos);
-            if ((closest - pos).sqrMagnitude < RopeSeeDistSqr)
+            Vector2 closest = KM.v2getClosestPointOnLine(climbable.points[i], climbable.points[i + 1], pos);
+            if ((closest - pos).sqrMagnitude < GameplayRanges.SimulationKeepRadiusSqr)
                 return true;
         }
         return false;
@@ -657,71 +481,46 @@ public class TrackerClimbableEntity : BaseSpecialStaticEntityTracker {
         if (_sprites == null)
             _sprites = GetComponentsInChildren<SpriteRenderer>(true);
         for (int i = 0; i < _sprites.Length; i++) {
-            var sprite = _sprites[i];
-            if (sprite != null && sprite.bounds.SqrDistance(pos) <= RopeSeeDistSqr)
+            SpriteRenderer sprite = _sprites[i];
+            if (sprite != null && sprite.bounds.SqrDistance(pos) <= GameplayRanges.SimulationKeepRadiusSqr)
                 return true;
         }
-        return ((Vector2)transform.position - pos).sqrMagnitude < RopeSeeDistSqr;
+        return ((Vector2)transform.position - pos).sqrMagnitude < GameplayRanges.SimulationKeepRadiusSqr;
     }
 
-
-
     [ClientReceiver((byte)NetmsgId.CLIENT_NoTheresNoRopeFuckOff)]
-    static void Client_NoTheresNoRopeFuckOff(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-
-        // read the data
+    static void ReceiveRopeDestroyed(knetid _, NetDataReader reader) {
         reader.Get(out Vector2 pos);
-
-#if !RELEASE
-        log.warn($"Client_NoTheresNoRopeFuckOff {pos}");
-#endif
-
         var sv = GetAtPos<TrackerClimbableEntity>(pos);
         if (sv != null) {
-            GameObject.Destroy(sv.gameObject);
+            Destroy(sv.gameObject);
         }
     }
 
-
-
     [ClientReceiver((byte)NetmsgId.CLIENT_ThereIsARope____)]
-    static void Client_ThereIsARope(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-#if !RELEASE
-        log.l($"ROPEEEEEEEEEEEEEEEEEE ThereIsARope!!!! actually works   ");
-#endif
+    static void ReceiveRopeAnnounce(knetid _, NetDataReader reader) {
+        reader.Get(out Vector2 ropePos);
+        reader.Get(out string ropeResourceId, true);
 
-        // read the data   so the mod only syncs the already translated dialogues
-        reader.Get(out Vector2 rope_pos);
-        reader.Get(out string rope_resourceid, true);
-
-        var rope = GetAtPos<TrackerClimbableEntity>(rope_pos);
+        var rope = GetAtPos<TrackerClimbableEntity>(ropePos);
         if (rope == null) {
-            rope = UnityEngine.Object.Instantiate(Resources.Load(rope_resourceid), rope_pos, Quaternion.identity).GetOrAddComponent<TrackerClimbableEntity>();
-        }// repeat 100 0 explode_player
+            rope = UnityEngine.Object.Instantiate(Resources.Load(ropeResourceId), ropePos, Quaternion.identity).GetOrAddComponent<TrackerClimbableEntity>();
+        }
         rope.was_synced = true;
 
-
-        //OG: WorldGeneration.GenerateWorld  V5t4 , theres only two places where Ropes get created and they are the same
-        var climbable = rope.GetComponent<Climbable>();
-
-
-        reader.Get(out Vector2[] newpoints);
+        Climbable climbable = rope.GetComponent<Climbable>();
+        reader.Get(out Vector2[] newPoints);
         reader.Get(out float downwardsVelocity);
-
         reader.Get(out Vector2 scale);
-        reader.Get(out float spritey);
+        reader.Get(out float sizeY);
 
-        climbable.points = new List<Vector2>(newpoints);
-
-
+        climbable.points = new List<Vector2>(newPoints);
         climbable.downwardsVelocity = downwardsVelocity;
-
         rope.spritescale = scale;
-        rope.spritey = spritey;
+        rope.spritey = sizeY;
 
-        var spr = rope.GetComponent<SpriteRenderer>();
+        SpriteRenderer spr = rope.GetComponent<SpriteRenderer>();
         if (rope.is_sandvine || rope.is_veinloop) {
-            //OG: WorldGeneration.WorldPlaceEntities V5t5 / fullgame veinloop
             spr.color = Color.Lerp(Color.gray, Color.white, UnityEngine.Random.value);
             if (rope.is_sandvine) {
                 spr.flipX = UnityEngine.Random.value > 0.5f;
@@ -731,683 +530,66 @@ public class TrackerClimbableEntity : BaseSpecialStaticEntityTracker {
         }
 
         climbable.CalculateTotalLength();
-
-
     }
 
-
-
-
     [ServerReceiver((byte)NetmsgId.SERVER_IsThereARope__)]
-    static void Server_IsThereARope(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-#if !RELEASE
-        log.l($"ROPEEEEEEEEEEEEEEEEEE IsThereARope?? actually works  {DebugHelp.GetPlayerFullDebugString(clientId)} ");
-#endif
-
+    static void ReceiveRopeQuery(knetid clientId, NetDataReader reader) {
         reader.Get(out Vector2 pos);
-
-
         var thing = GetAtPos<TrackerClimbableEntity>(pos);
         if (thing == null) {
-            var writer = Net.CreateWriter(NetmsgId.CLIENT_NoTheresNoRopeFuckOff);
-
-            writer.Put((Vector2)pos);
-
+            NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_NoTheresNoRopeFuckOff);
+            writer.Put(pos);
             Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: clientId);
-
-            // WRITER END;
         } else {
             thing.Server_Announce();
         }
-
-        // ghost em
-        // they already triggered the bool so they wont ask again 
     }
-
-
 }
 
-
-
-
-
-
+/// <summary>
+/// 静态洞穴蜱虫群落位置存在性同步追踪器。
+/// </summary>
 public class TrackerStaticCaveTicks : BaseSpecialStaticEntityTracker {
-
     void Awake() {
         REQ = (byte)NetmsgId.SERVER_Krokosha_CaveTicks_Tracker_request;
     }
 
     public override void Server_Announce() {
-        //if (!was_synced) 
-        {
-            was_synced = true;
-
-            var writer = Net.CreateWriter(NetmsgId.CLIENT_Krokosha_CaveTicks_Tracker_announce);
-
-            writer.Put((Vector2)transform.position);
-
-
-#if TESTING
-            log.l($"SERVER , sending  Krokosha_CaveTicks_Tracker_announce     {(Vector2)transform.position} ");
-#endif
-
-            Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
-
-            // WRITER END;
-        }
+        was_synced = true;
+        NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_Krokosha_CaveTicks_Tracker_announce);
+        writer.Put((Vector2)transform.position);
+        Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
     }
 
-
     [ClientReceiver((byte)NetmsgId.CLIENT_Krokosha_CaveTicks_Tracker_deny)]
-    static void Client_NoTheresNoSandvineFuckOff(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-
+    static void ReceiveCaveTicksDeny(knetid _, NetDataReader reader) {
         reader.Get(out Vector2 pos);
-
-#if TESTING
-        log.l($"CLIENT, Krokosha_CaveTicks_Tracker_deny actually works     {pos} ");
-#endif
-
-        var sv = GetAtPos<TrackerStaticCaveTicks>(pos);
-        if (sv != null) {
-            GameObject.Destroy(sv.gameObject);
+        var ticks = GetAtPos<TrackerStaticCaveTicks>(pos);
+        if (ticks != null) {
+            Destroy(ticks.gameObject);
         }
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_Krokosha_CaveTicks_Tracker_announce)]
-    static void Client_Krokosha_CaveTicks_Tracker_announce(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-
+    static void ReceiveCaveTicksAnnounce(knetid _, NetDataReader reader) {
         reader.Get(out Vector2 pos);
-
-#if TESTING
-        log.l($"CLIENT, Krokosha_CaveTicks_Tracker_announce actually works     {pos} ");
-#endif
-
         if (GetAtPos<TrackerStaticCaveTicks>(pos) == null) {
-            GameObject svRope = (GameObject)UnityEngine.Object.Instantiate(Resources.Load("CaveTicks"), pos, Quaternion.identity);
-
-            // and force the thing to be true
-            var abomination = svRope.GetOrAddComponent<TrackerStaticCaveTicks>();
-            abomination.was_synced = true;
+            GameObject spawned = (GameObject)UnityEngine.Object.Instantiate(Resources.Load("CaveTicks"), pos, Quaternion.identity);
+            var tracker = spawned.GetOrAddComponent<TrackerStaticCaveTicks>();
+            tracker.was_synced = true;
         }
     }
 
-
     [ServerReceiver((byte)NetmsgId.SERVER_Krokosha_CaveTicks_Tracker_request)]
-    static void Server_Krokosha_CaveTicks_Tracker_request(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-
+    static void ReceiveCaveTicksRequest(knetid clientId, NetDataReader reader) {
         reader.Get(out Vector2 pos);
-
-#if TESTING
-        log.l($"Krokosha_CaveTicks_Tracker_request actually works  {DebugHelp.GetPlayerFullDebugString(clientId)}   {pos} ");
-#endif
-
         var thing = GetAtPos<TrackerStaticCaveTicks>(pos);
         if (thing == null) {
-            var writer = Net.CreateWriter(NetmsgId.CLIENT_Krokosha_CaveTicks_Tracker_deny);
-
-            writer.Put((Vector2)pos);
-
+            NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_Krokosha_CaveTicks_Tracker_deny);
+            writer.Put(pos);
             Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: clientId);
-
-            // WRITER END;
-
         } else {
             thing.Server_Announce();
         }
-
-        // ghost em
-        // they already triggered the bool so they wont ask again 
     }
-
-}
-
-
-
-
-
-
-[HarmonyPatch(typeof(BuildingEntity), nameof(BuildingEntity.Backgroundify))]
-public static class BuildingEntity_Backgroundify_MultiplayerPatch {
-    static void Prefix(BuildingEntity __instance) {
-        var tr = __instance.GetOrAddComponent<TrackerBuildingEntityBackgroundified>();
-        tr.is_backgroundified = true;
-    }
-}
-
-
-[HarmonyPatch(typeof(BuildingEntity), nameof(BuildingEntity.CheckSeating))]
-internal static class BuildingEntity_CheckSeating_MultiplayerPatch {
-    static bool Prefix() {
-        // client instances do not have the worldgen support block or its listeners.
-        return !(Net.IsRunning && Net.IsClient);
-    }
-}
-
-[HarmonyPatch(typeof(BuildingEntity), nameof(BuildingEntity.Update))]
-public static class BuildingEntity_Update_MultiplayerPatch {
-
-    static bool Prefix(BuildingEntity __instance, ref Vector3 __state) {
-        __state = new Vector3();
-        // the server sends the destruction and loot; clients must not roll their own drops.
-        // the skip used to drop the break particle, the dust, and AnimalDeath with them.
-        if (Net.IsRunning && Net.IsClient && __instance.GetHealth() < 0.5f) {
-            PlayDeathOnce(__instance);
-            return false;
-        }
-        return true;
-    }
-
-    // one shot. health stays under 0.5 until the destroy packet, and Update would fire every frame.
-    internal static void PlayDeathOnce(BuildingEntity be) {
-        if (be == null || be.GetComponent<ClientDeathFxPlayed>() != null)
-            return;
-        be.gameObject.AddComponent<ClientDeathFxPlayed>();
-
-        if (be.TryGetComponent(out SpriteRenderer sprite) && sprite.sprite != null) {
-            var broken = Object.Instantiate(Resources.Load("BuildingBreakParticle"), be.transform.position, be.transform.rotation) as GameObject;
-            if (broken != null && broken.TryGetComponent(out ParticleSystem ps)) {
-                var shape = ps.shape;
-                shape.texture = sprite.sprite.texture;
-                shape.sprite = sprite.sprite;
-                ps.Play();
-            }
-        }
-        Object.Instantiate(Resources.Load<GameObject>("DustBig"), be.transform.position, Quaternion.identity);
-        PlayAnimalDeathFx(be);
-        Sound.Play("footstep/Rock/11", be.transform.position);
-    }
-
-    // stock AnimalDeath also grants xp. the host already did that. this is only the sound and the burst.
-    static void PlayAnimalDeathFx(BuildingEntity be) {
-        if (be.TryGetComponent(out CrystalEnemy _)) {
-            Sound.Play("crystalenemydeath", be.transform.position, false, false);
-            var distort = Utils.Create("Special/CrystalDistort", be.transform.position, 0f);
-            if (distort != null)
-                distort.AddComponent<CrystalDeathAnimation>();
-            return;
-        }
-        if (be.TryGetComponent(out SpiderHandler spider)) {
-            Sound.Play("gore", be.transform.position);
-            if (spider.doDeathExplode)
-                Object.Instantiate(Resources.Load("BloodExplosion"), be.transform.position, Quaternion.identity);
-            return;
-        }
-        if (be.TryGetComponent(out TraderScript trader)) {
-            Vector3 pos = trader.torso != null ? trader.torso.position : be.transform.position;
-            Sound.Play("gore", pos);
-            Object.Instantiate(Resources.Load("BloodExplosion"), pos, Quaternion.identity);
-        }
-    }
-    static void Postfix(BuildingEntity __instance) {
-        if (__instance != null)
-            ChunkSleep.Watch(__instance);
-
-        //OG: BuildingEntity.Update V5t4
-        if (__instance.TryGetComponent(out Rigidbody2D rb) && !__instance.ignoreBodyOptimize) {
-            BuildingOptimization(rb);
-        }
-    }
-
-    static void BuildingOptimization(Rigidbody2D rb) {
-
-        //OG: BuildingEntity.Update V6.0-pre5 , that one liner but extended and just upgraded for multiplayer
-
-        if (!WorldGeneration.world.worldExists || !(Time.timeScale <= 5f)) {
-            rb.bodyType = RigidbodyType2D.Static;
-            return;
-        }
-
-        var inSimRange = SharedMain.WorldInSimRange(rb.position);
-
-        rb.bodyType = inSimRange ? RigidbodyType2D.Dynamic : RigidbodyType2D.Static;
-
-    }
-
-    // fullgame moved death/loot out of Update into CheckDamage. this rewrite no-ops when the
-    // footstep marker is missing (Update), and force-enables FreshItemDrop distance on CheckDamage.
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
-        return FullgameBodyOptimizeSkipPatch.Rewrite(instructions);
-    }
-
-}
-
-#if FULLGAME
-// stock health setter now calls CheckDamage immediately. clients must not roll loot or Destroy.
-// only play the break/kill burst when actually dead - any non-lethal hit used to fire PlayDeathOnce.
-[HarmonyPatch(typeof(BuildingEntity), "CheckDamage")]
-public static class BuildingEntity_CheckDamage_MultiplayerPatch {
-    static bool Prefix(BuildingEntity __instance) {
-        if (Net.IsRunning && Net.IsClient) {
-            if (__instance.GetHealth() < 0.5f) {
-                BuildingEntity_Update_MultiplayerPatch.PlayDeathOnce(__instance);
-            }
-            return false;
-        }
-        return true;
-    }
-
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
-        return FullgameBodyOptimizeSkipPatch.Rewrite(instructions);
-    }
-}
-#endif
-
-internal static class FullgameBodyOptimizeSkipPatch {
-    internal static IEnumerable<CodeInstruction> Rewrite(IEnumerable<CodeInstruction> instructions) {
-        List<CodeInstruction> codes = new List<CodeInstruction>(instructions);
-
-        int ldstr = -1;
-        for (int k = 0; k < codes.Count; k++) {
-            if (codes[k].opcode == OpCodes.Ldstr && codes[k].operand as string == "footstep/Rock/11") {
-                ldstr = k;
-                break;
-            }
-        }
-        if (ldstr < 0) {
-            // update on fullgame has no death block. leave body-optimize alone; Postfix handles it.
-            return codes;
-        }
-
-        int stloc = -1;
-        for (int k = ldstr; k < codes.Count; k++) {
-            if (codes[k].opcode == OpCodes.Stloc_1) {
-                stloc = k;
-                break;
-            }
-        }
-        if (stloc < 0) {
-            return codes;
-        }
-
-        int beginning = stloc;
-        while (beginning >= 0 && codes[beginning].opcode != OpCodes.Ldarg_0) {
-            beginning--;
-        }
-        if (beginning < 0) {
-            return codes;
-        }
-
-        int bodyCheck = -1;
-        for (int k = 0; k < codes.Count; k++) {
-            if (codes[k].opcode == OpCodes.Ldfld && codes[k].operand != null && codes[k].operand.ToString().Contains("ignoreBodyOptimize")) {
-                bodyCheck = k;
-                break;
-            }
-        }
-
-        codes[beginning].opcode = OpCodes.Ldc_I4_1;
-        codes.RemoveRange(beginning + 1, stloc - 1 - beginning);
-
-        if (bodyCheck >= 0 && bodyCheck + 1 < codes.Count &&
-            (codes[bodyCheck + 1].opcode == OpCodes.Brtrue || codes[bodyCheck + 1].opcode == OpCodes.Brtrue_S)) {
-            int brtrue = bodyCheck + 1;
-            Label endLabel = (Label)codes[brtrue].operand;
-            int scopeEnd = -1;
-            for (int k = brtrue + 1; k < codes.Count; k++) {
-                if (codes[k].labels.Contains(endLabel)) {
-                    scopeEnd = k;
-                    break;
-                }
-            }
-            if (scopeEnd > brtrue) {
-                codes.RemoveRange(brtrue + 1, scopeEnd - brtrue - 1);
-            }
-        }
-
-        return codes;
-    }
-}
-
-// marks a client building that already played its death burst. the health byte stays dead until the destroy arrives.
-sealed class ClientDeathFxPlayed : MonoBehaviour {
-}
-
-
-
-
-
-[HarmonyPatch(typeof(BuildingEntity), nameof(BuildingEntity.Start))]
-public static class BuildingEntity_Start_MultiplayerPatch {
-    public const string identified_bg_prefix = "KMPSR_"; // special resource tag prefix for the id
-
-    static void Prefix(BuildingEntity __instance) {
-        __instance.GetOrAddComponent<TrackerBuildingEntityBackgroundified>();
-    }
-
-    static void Postfix(BuildingEntity __instance) {
-        if (!Net.IsRunning) return;
-
-        if (__instance.GetComponent<Heater>()) {
-            // i rewrote the heater to support multiple players
-            __instance.GetOrAddComponent<HeaterMultiplayerRewrite>();
-        } else {
-            // plants / AC may AddComponent<Heater> in their own Start after this postfix
-            __instance.StartCoroutine(AttachHeaterRewriteNextFrame(__instance));
-        }
-
-        if (__instance.TryGetComponent(out TrackerClimbableEntity ropetracker) && !string.IsNullOrEmpty(ropetracker.og_id)) {
-            //OG: BuildingEntity.Start V510
-            __instance.fullName = Locale.GetBuilding(ropetracker.og_id);
-            if (!__instance.skipDescriptionSet) {
-                __instance.description = Locale.GetBuilding(ropetracker.og_id + "dsc");
-            }
-        } else if (__instance.TryGetComponent(out TraderScript traderrrr)) {
-            // traders all have same id (not representing resource name), but their "character" value is consistently pointing to the correct id
-            __instance.id = "trader" + (traderrrr.character + 1).ToString();
-        } else if (__instance.TryGetComponent(out SoundCannon sndcannon)) {
-            __instance.GetOrAddComponent<TrackerSoundCannon>();
-        } else if (__instance.TryGetComponent(out TurretScript turret)) {
-            __instance.GetOrAddComponent<TrackerTurret>();
-        } else if (__instance.TryGetComponent(out CorpseScript corpse)) {
-            __instance.GetOrAddComponent<CorpseScriptMultiplayerRewrite>();
-        } else if (__instance.TryGetComponent(out GunmineScript _gunminescripppptptttt)) {
-            var owro = __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
-            owro.target = _gunminescripppptptttt;
-        } else if (__instance.TryGetComponent(out StalactiteDropper _gffdgfdfdgStalactiteDropper)) {
-            var owro = __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
-            owro.target = _gffdgfdfdgStalactiteDropper;
-#if FULLGAME
-        } else if (__instance.TryGetComponent(out LaserDroneScript _cryodrone)) {
-            var owro = __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
-            owro.target = _cryodrone;
-        } else if (__instance.TryGetComponent(out BloodSuckerScript _bloodsucker)) {
-            // suck drain lives in OnWillRenderObject - without ForceForMP, dens only work in the host camera frustum
-            var owro = __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
-            owro.target = _bloodsucker;
-        } else if (__instance.id == "macrofleshrebuilder" && __instance.GetComponent<SurgicalDeviceBehavior>() == null) {
-            // runtime component from EndLabScript.Start; a synced copy of the building does not have it, so OnUse never fired
-            __instance.gameObject.AddComponent<SurgicalDeviceBehavior>();
-#endif
-        } else if (__instance.TryGetComponent(out SpiderHandler SPIDAR)) {
-            var spoodertracker = SPIDAR.GetOrAddComponent<TrackerSpiderHandler>();
-        } else if (__instance.id == "background") {
-            log.error($"DEV: Error, unknown background: {__instance} - id:({__instance.id}) at {(Vector2)__instance.transform.position} ");
-        } else if (__instance.id == "shuttledoor" && __instance.transform.parent?.TryGetComponent(out ShuttleStartOpen ssoooooooooooooooooooo) == true) {
-            __instance.GetOrAddComponent<KrokoshaScavMultiGameObjectNetworkTracker_FORCEIGNORE>();
-            return;
-        }
-
-        if (WorldGeneration.world && !WorldGeneration.world.generatingWorld && __instance.gameObject.activeInHierarchy && NetObjectRegistry.ObjectShouldBeSynced(__instance.gameObject)) {
-            // same 3x3 the far pass uses. the 64-unit gate registered a floor the next slow pass then deleted.
-            if (SharedMain.WorldInSimRange(__instance.transform.position))
-                NetObjectRegistry.NewGO(__instance.gameObject);
-        }
-
-
-    }
-
-    static IEnumerator AttachHeaterRewriteNextFrame(BuildingEntity building) {
-        yield return null;
-        if (building == null || building.gameObject == null) {
-            yield break;
-        }
-        if (building.GetComponent<Heater>() != null) {
-            building.GetOrAddComponent<HeaterMultiplayerRewrite>();
-        }
-    }
-}
-
-
-[HarmonyPatch(typeof(SpiderHandler), nameof(SpiderHandler.PlayThreatMusic))]
-static class SpiderHandler_PlayThreatMusic_MultiplayerPatch {
-    static bool Prefix(SpiderHandler __instance) { // make it play the music if its actually within radius of local player.  cuz it gets triggered for any body 
-        return KM.DistanceCheck(Camera.main.transform.position, __instance.transform.position, __instance.seeDistance);
-    }
-}
-
-
-
-
-// fuck it, make the spider damage client-authoritative
-[HarmonyPatch(typeof(SpiderHandler), nameof(SpiderHandler.CheckForLimbDamage))]
-public static class SpiderHandler_CheckForLimbDamage_MultiplayerPatch {
-    static bool Prefix(SpiderHandler __instance, ref Collision2D collision) {
-        if (NetObjectRegistry.TryGetSyncInfo(__instance.gameObject, out var si)) {
-
-            Limb limb = Body.LimbFromObject(collision.gameObject, __instance.transform.position);
-            if (limb != null && limb.TryGetNetBody(out var pb)) {
-                if (!pb.IsBodyLocal()) { // wait for the players confirmation that they have been actually bit
-                    if (pb.body.conscious) {// if theyre unconscious, server will handle the damage
-                        return false;
-                    }
-                } else {
-                    if (Net.IsClient && pb.body.conscious && __instance.TryGetComponent<SyncInfoGameObjectTracker>(out var tracker)) { // client must tell the server if theyve been hit
-                        //OG: SpiderHandler.CheckForLimbDamage V5t4 
-                        if ((Vector2.Dot(((Vector2)collision.transform.position - collision.GetContact(0).point).normalized, __instance.transform.up) > __instance.minVectorDotToBite)) {
-
-                            if (log.verbose) Plugin.log.LogInfo($"DEV: SpiderJustBitMe {si} ");
-
-                            // so its guranteed that the body gets hit, tell the server about it
-                            Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_SpiderJustBitMeFuck, tracker.syncId, Util.GetLimbIndex(limb), false);
-
-                            pb.SetNetHealthSyncIgnoreTime();
-
-                            // and allow it to go through to bite his ass
-                        }
-                    }
-                }
-
-                pb.RollDamageRandom();
-
-                pb.OnDamageEvent(new BodyDamageEvent(__instance.bld, pb, __instance.biteMuscleDamage));
-            }
-        }
-
-        return true;
-    }
-
-    //OG: SpiderHandler.CheckForLimbDamage V5t4
-    public static void Spider_BiteDamage(SpiderHandler spider, Limb limb) {
-        var spoodertracker = spider.GetOrAddComponent<TrackerSpiderHandler>();
-
-        if (limb.TryGetNetBody(out var nb)) {
-            nb.RollDamageRandom();
-            nb.OnDamageEvent(new BodyDamageEvent(spider.bld, nb, spider.biteMuscleDamage));
-        }
-
-        if (spider is SpiderHandlerTBE) {
-            spider.biteCooldown = 5; // cuz biteCoolToSet is set to 0 on elders brah
-        } else {
-            spider.biteCooldown = spider.biteCoolToSet;
-        }
-
-        limb.body.happiness -= spider.happinessLoss;
-        spider.target = (spider.transform.position - limb.transform.position).normalized * 15f + spider.transform.position;
-        spider.moveTime = spider.retreatMoveTime;
-        spider.DamageLimb(limb);
-        if (spider.hitConnected) {
-            Limb[] connectedLimbs = limb.connectedLimbs;
-            foreach (Limb limb2 in connectedLimbs) {
-                spider.DamageLimb(limb2);
-            }
-        }
-
-        if (Net.IsServer && nb != null && spoodertracker.tracker) {
-
-            var writer = Net.CreateWriter(NetmsgId.CLIENT_SpiderAttackEffect);
-            writer.Put(nb.netId);
-            writer.Put(spoodertracker.tracker.syncId);
-            writer.Put(spider.transform.position);
-            writer.Put(spider.transform.eulerAngles.z);
-            Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThis(nb.netId));
-            // WRITER END;
-        }
-
-    }
-
-
-    [ServerReceiver((byte)NetmsgId.SERVER_SpiderJustBitMeFuck)]
-    static void Server_SpiderJustBitMeFuck(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        log.l($"SpiderJustBitMeFuck actually works lol {DebugHelp.GetPlayerFullDebugString(clientId)} ");
-#endif
-
-        reader.Get(out knetid spider_syncid);
-        reader.Get(out byte limbid);
-
-        if (ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out var plr, out var body) &&
-            body.conscious && // assuming that theyre fighting the creature, else server will do the damage on their own
-            limbid < body.limbs.Count() &&
-            NetObjectRegistry.TryGetSyncInfo(spider_syncid, out var si) && si.IsSpider()
-        ) {
-
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(plr.body.transform.position, $"S: SpiderJustBitMeFuck");
-
-            Spider_BiteDamage(si.spider, body.limbs[limbid]);
-
-
-        }
-    }
-
-
-    // elder bite ignores the limb that was hit and rolls a random one.
-    // the bitten client was rolling too, so a leg could come off and drop the pouch,
-    // then the host snapshot put that leg back and tore the arm off instead.
-    [HarmonyPatch(typeof(SpiderHandlerTBE), nameof(SpiderHandlerTBE.DamageLimb))]
-    static class SpiderHandlerTBE_DamageLimb_MultiplayerPatch {
-        static bool Prefix() {
-            return Net.IsServer;
-        }
-    }
-
-    [ClientReceiver((byte)NetmsgId.CLIENT_SpiderAttackEffect, false)]
-    static void Client_SpiderAttackEffect(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        log.l($"SpiderAttackEffect actually works lol  ");
-#endif
-
-        reader.Get(out knetid target_clientid);
-        reader.Get(out knetid spider_syncid);
-        reader.Get(out Vector2 pos);
-        reader.Get(out float angle);
-
-        if (ScavPlayer.TryGetPlayerAndBodyFromClientId(target_clientid, out var plr, out var body) &&
-            NetObjectRegistry.TryGetSyncInfo(spider_syncid, out var si) && si.IsSpider()
-        ) {
-            var spider = si.spider;
-
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(plr.body.transform.position, $"C: SpiderAttackEffect");
-
-            //OG: SpiderHandler.CheckForLimbDamage V5t4
-            Sound.Play(spider.biteSound, spider.transform.position);
-            body.eyeScareTime = 5f;
-            spider.PlayThreatMusic();
-            if (spider.clawAnim) {
-                GameObject obj = UnityEngine.Object.Instantiate(Resources.Load<GameObject>("ClawAnim"));
-                obj.transform.eulerAngles = new Vector3(0f, 0f, angle); // i changed this cuz fuck it
-                obj.transform.position = spider.transform.position;
-                obj.transform.SetParent(spider.transform);
-                UnityEngine.Object.Destroy(obj, 5f);
-            }
-
-        }
-    }
-
-}
-
-
-public class TrackerSpiderHandler : BaseComponentTracker<SpiderHandler> {
-
-    protected override void TrackerAwake() { // called in Awake()
-    }
-
-    void LateUpdate() {
-        if (SharedMain.WorldInSimRange(transform.position)) {
-            if (!TryGetComponent(out SyncInfoGameObjectTracker tracker) && gameObject != null) {
-                NetObjectRegistry.NewGO(gameObject);
-            }
-        }
-    }
-
-    // animalDeath gets triggered only by SendMessage from the BuildingEntity
-    public void AnimalDeath() {
-        //OG: SpiderHandler.AnimalDeath V5t4
-
-        // make the exp thing apply to all players
-        foreach (var item in NetBody.GetBodiesInRadius(og.transform.position, 32f)) {
-            if (!Util.IsBodyLocal(item.body)) {// playerCamera.main.body already gets the exp
-                item.body.skills.AddExp(1, og.maxHealth / 100f);
-            }
-        }
-    }
-}
-
-
-
-
-
-
-
-internal class ScavMPBuildingSynchronizer : CasualtiesTogetherSingleton {
-
-
-    public static bool BuildingHasActivePhysics(BuildingEntity building) {
-        // btw dont check if its sleeping , i dont need it to affect this
-        if (building.TryGetComponent(out Rigidbody2D rb) && rb.bodyType == RigidbodyType2D.Dynamic) {
-            return true;
-        }
-        if (building.TryGetComponent(out GrabberPlant gp)) {
-            return true;
-        }
-
-        return false;
-    }
-    public static bool BuildingHasActivePhysics(SyncInfo si) {
-        return BuildingHasActivePhysics(si.building);
-    }
-
-
-    public static Dictionary<string, GameObject> known_entities_with_nonunique_id = new();
-    public static Dictionary<string, string> TEMP_known_entities_with_nonunique_id_to_og = new();
-
-
-    internal static int cur_buildings_check_index = 0;
-    internal static List<BuildingEntity> cur_buildings_check = new List<BuildingEntity>();
-
-
-    public static void RegisterNonUniqueIdBg(Transform ch, bool report_fail) {
-        if (ch.TryGetComponent(out BuildingEntity build)) {
-            if ((bool)ch.TryGetComponent(out Tilemap tilemmeep)) { // this is most likely a background yay!
-                // fullgame structure floors often ship with empty id (demo used "background")
-                bool needsRename = string.IsNullOrEmpty(build.id) || build.id == "background";
-                if (needsRename) {
-                    if (ch.parent == null) {
-                        log.error($"RegisterNonUniqueIdBg: tilemap building has no parent (id='{build.id}' name={ch.name})");
-                        return;
-                    }
-
-                    var og_res_name = ch.parent.name;
-                    var newName = BuildingEntity_Start_MultiplayerPatch.identified_bg_prefix + og_res_name;
-                    if (log.verbose)
-#if !RELEASE
-                        log.l($"Found BG: id:{build.id},\tparent:{ch.parent},\tRENAMED: {newName}\t{new StackTrace()}");
-#else
-                        log.l($"Found BG: id:{build.id},\tparent:{ch.parent},\tRENAMED: {newName}");
-#endif
-
-
-                    build.id = newName;
-
-                    ScavMPBuildingSynchronizer.known_entities_with_nonunique_id[build.id] = build.gameObject;
-                    ScavMPBuildingSynchronizer.TEMP_known_entities_with_nonunique_id_to_og[build.id] = og_res_name;
-
-                    var shittracker = build.GetOrAddComponent<TrackerBuildingEntityBackgroundified>();
-                    shittracker.is_a_background_tilemap = true;
-
-                    build.name = build.id;
-
-                    return;
-                } else if (!build.id.StartsWith(BuildingEntity_Start_MultiplayerPatch.identified_bg_prefix)) { // if doesnt start witrh prefix
-                    log.error($"wtf is this building tilemap id? (its the part where i check backgrounds type shit): id='{build.id}' name={ch.name} parent={ch.parent?.name}");
-                    return;
-                }
-            }
-        }
-        if (report_fail) {
-            log.warn($"RegisterNonUniqueIdBg -> \"{ch?.name}\" wtf is this");
-        }
-    }
-
-
 }

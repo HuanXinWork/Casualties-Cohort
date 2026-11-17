@@ -141,9 +141,9 @@ public class BanList :CasualtiesTogetherSingleton {
     private void Save() {
         try {
             string json = JsonConvert.SerializeObject(prefs, Formatting.Indented);
-            File.WriteAllText(filePath, json);
+            File.WriteAllText(filePath, json, new UTF8Encoding(false));
         } catch (Exception e) {
-            Debug.LogError("BanList Save failed: " + e);
+            Together.Diagnostics.ModLog.Exception(Together.Diagnostics.LogDomain.Security, "BanList Save failed", e);
         }
     }
 
@@ -155,7 +155,7 @@ public class BanList :CasualtiesTogetherSingleton {
                 return;
             }
         } catch (Exception e) {
-            Debug.LogError("BanList Load failed: " + e);
+            Together.Diagnostics.ModLog.Exception(Together.Diagnostics.LogDomain.Security, "BanList Load failed", e);
         }
 
         prefs = new PrefData();

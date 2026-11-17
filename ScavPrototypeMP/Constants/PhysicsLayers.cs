@@ -12,6 +12,7 @@ namespace Together.MpConstants {
 
         private static int _itemMask;
         private static int _groundMask;
+        private static int _groundLayerIndex = -1;
         private static bool _initialized;
 
         private static void EnsureInitialized() {
@@ -20,10 +21,20 @@ namespace Together.MpConstants {
             }
             int item = LayerMask.GetMask(ItemLayerName);
             int ground = LayerMask.GetMask(GroundLayerName);
+            int groundIndex = LayerMask.NameToLayer(GroundLayerName);
             if (item != 0 || ground != 0) {
                 _itemMask = item;
                 _groundMask = ground;
+                _groundLayerIndex = groundIndex;
                 _initialized = true;
+            }
+        }
+
+        /// <summary>缓存的 <c>Ground</c> 图层索引值（0..31）。</summary>
+        public static int GroundLayerIndex {
+            get {
+                EnsureInitialized();
+                return _groundLayerIndex >= 0 ? _groundLayerIndex : LayerMask.NameToLayer(GroundLayerName);
             }
         }
 

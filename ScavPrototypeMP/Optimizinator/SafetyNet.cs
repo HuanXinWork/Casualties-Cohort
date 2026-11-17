@@ -1,17 +1,20 @@
-using CasualtiesTogetherUtils;
 using System.Collections.Generic;
 using Together;
+using Together.MpConstants;
 using UnityEngine;
 
 namespace KrokV5Optimization;
 
+/// <summary>
+/// 服务端近场网络实体分帧注册安全网：每帧按存活玩家轮转扫描一个象限，近身范围内立即注册，远端共享固定配额。
+/// </summary>
 internal static class SafetyNet {
     private const float Radius = 80f;
-    private const float Close = 10f;
+    private const float Close = GameplayRanges.CraftGroundScanRadius;
     private const int FarBudget = 16;
+    private const float WaitSeconds = 1.9f;
 
-    private static readonly Vector2[] Quadrant =
-    {
+    private static readonly Vector2[] Quadrant = {
         new Vector2(1f, 1f),
         new Vector2(-1f, 1f),
         new Vector2(-1f, -1f),
@@ -29,7 +32,6 @@ internal static class SafetyNet {
     private static int _quadrant;
     private static int _farLeft = FarBudget;
 
-    // host only. one quadrant, then the next, then the next living player, then the wait.
     internal static void Tick() {
         if (!Net.IsServer)
             return;
@@ -67,7 +69,7 @@ internal static class SafetyNet {
 
         if (!_logged) {
             _logged = true;
-            OptimizerMain.Log.LogDebug("[KrokV5Optimization] safety net is one quadrant per frame, then wait " + Delay().ToString("0.0") + "s");
+            OptimizerMain.Log.LogDebug("[KrokV5Optimization] safety net is one quadrant per frame, then wait " + WaitSeconds.ToString("0.0") + "s");
         }
 
         _quadrant++;
@@ -81,22 +83,14 @@ internal static class SafetyNet {
             BeginWait();
     }
 
-    // rest after the last living player. the next loop starts at the first player again.
     private static void BeginWait() {
         _waiting = true;
-        _wait = Delay();
+        _wait = WaitSeconds;
         _player = 0;
         _quadrant = 0;
         _farLeft = FarBudget;
     }
 
-    private const float WaitSeconds = 1.9f;
-
-    private static float Delay() {
-        return WaitSeconds;
-    }
-
-    // box over this quarter of the 80 circle. the first quadrant also walks bags, backgrounds, and other bodies.
     private static void StampQuadrant(ScavPlayer plr, int quadrant) {
         Vector2 pos = plr.pos;
         Vector2 center = pos + Quadrant[quadrant] * (Radius * 0.5f);
@@ -136,7 +130,6 @@ internal static class SafetyNet {
             }
         }
 
-        // the other three quadrants are only the box query.
         if (quadrant != 0)
             return;
 
@@ -169,17 +162,14 @@ internal static class SafetyNet {
         }
     }
 
-    // register an unregistered object the game should sync. within 10 units always. farther objects share a budget of 16.
-    // crystals are dense on layer 7+: never use the unlimited close band - always spend far budget (skiplayer flood).
     private static void Note(GameObject go, Vector2 pos) {
         if (go == null || NetObjectRegistry.IsRegistered(go) || !NetObjectRegistry.ObjectShouldBeSynced(go))
             return;
-        // outside the 3x3 the far pass drops the id and leaves the mesh. registering it out here just repeats that.
         if (!NetObjectRegistry.ShouldKeepRegistered(go))
             return;
 
 #if FULLGAME
-		bool crystal = CrystalAuthority.LooksLikeCrystal(go);
+        bool crystal = CrystalAuthority.LooksLikeCrystal(go);
 #else
         bool crystal = false;
 #endif

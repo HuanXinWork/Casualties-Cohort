@@ -187,7 +187,8 @@ public static class Item_DoAmputate_MultiplayerPatch {
                 ItemsThatCanAmputate.Add(item.id);
                 return true;
             }
-        } catch {
+        } catch (Exception ex) {
+            Together.Diagnostics.ModLog.Debug($"IsAmputateTool reflection skipped for {item.id}: {ex.Message}", Together.Diagnostics.LogDomain.Medical);
         }
         return false;
     }
@@ -216,7 +217,9 @@ public static class Item_DoAmputate_MultiplayerPatch {
                 if (resolved != null && resolved.Name == nameof(Item.DoAmputate) && resolved.DeclaringType == typeof(Item)) {
                     return true;
                 }
-            } catch {
+            } catch (Exception ex) {
+                // 非方法元数据 token（如操作数字节碰巧为 0x28/0x6F）正常忽略继续扫描
+                _ = ex;
             }
         }
         return false;

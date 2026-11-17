@@ -1,45 +1,36 @@
+using System;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
-using System.Reflection.Emit;
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using Unity.Collections;
+using LiteNetLib.Utils;
+using Together.Diagnostics;
+using Together.MpConstants;
 using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.U2D.IK;
 using Random = UnityEngine.Random;
 
 namespace Together;
 
-
-
-
-
-
-
+/// <summary>
+/// 场地环境危害、接触陷阱、自动炮塔与声波炮同步逻辑。
+/// 钟乳石落石与坠落木箱的 IL 补丁与冷却同步见 <c>Traps.Crates.cs</c>。
+/// </summary>
 [HarmonyPatch(typeof(RadioactiveObject), nameof(RadioactiveObject.Update))]
 static class RadioactiveObject_Update_MultiplayerPatch {
-
     static bool Prefix(RadioactiveObject __instance) {
         if (!Net.IsRunning) {
             return true;
         }
 
-        // radiationSickness is medical / host-authoritative.
-        // irradiateIntensity is local camera vignette - must run on the client that owns the camera.
         if (Net.IsServer) {
             foreach (var bodynpc in NetBody.all_instances) {
-                var body = bodynpc.body;
+                var body = bodynpc?.body;
                 if (body == null) {
                     continue;
                 }
 
-                //OG: RadioactiveObject.Update V5t4
                 float num = Vector2.Distance(__instance.transform.position, body.transform.position) * 0.3f;
                 float num2 = __instance.radAtZero * (1f / Mathf.Max(num * num, 1f));
                 if (num2 > 0.1f) {
@@ -50,7 +41,6 @@ static class RadioactiveObject_Update_MultiplayerPatch {
             return false;
         }
 
-        // client: vignette only for local body (sickness arrives via medical sync)
         if (ScavPlayer.TryGetLocalNetBody(out var localNb) && localNb.body != null) {
             float num = Vector2.Distance(__instance.transform.position, localNb.body.transform.position) * 0.3f;
             float num2 = __instance.radAtZero * (1f / Mathf.Max(num * num, 1f));
@@ -60,26 +50,20 @@ static class RadioactiveObject_Update_MultiplayerPatch {
         }
         return false;
     }
-
-
 }
-
-
-
-
-
 
 [HarmonyPatch(typeof(XalorisScript), nameof(XalorisScript.OnWillRenderObject))]
 public static class XalorisScript_OnWillRenderObject_MultiplayerPatch {
-
-    public class Krokosha_XalorisScript_OverrideComponent : UnityEngine.MonoBehaviour {
+    public class Krokosha_XalorisScript_OverrideComponent : MonoBehaviour {
         float lastTime = 0f;
+
         void Update() {
-            //OG: XalorisScript.OnWillRenderObject V4
             if (Time.time - lastTime > 0.5f) {
                 lastTime = Time.time;
                 foreach (var obj in ScavPlayer.GetPlayerBodiesInRadius(transform.position, 5.5f)) {
-                    obj.body.septicShock += 0.074f;
+                    if (obj?.body != null) {
+                        obj.body.septicShock += 0.074f;
+                    }
                 }
             }
         }
@@ -87,34 +71,21 @@ public static class XalorisScript_OnWillRenderObject_MultiplayerPatch {
 
     static bool Prefix(XalorisScript __instance) {
         if (Net.IsRunning) {
-            var tr = __instance.GetOrAddComponent<Krokosha_XalorisScript_OverrideComponent>();
+            __instance.GetOrAddComponent<Krokosha_XalorisScript_OverrideComponent>();
             return false;
         }
         return true;
     }
 }
 
-
-
-
-
-
-
 [HarmonyPatch(typeof(SpikeStabberScript), nameof(SpikeStabberScript.Stab))]
 static class SpikeStabberScript_Stab_MultiplayerPatch {
     static void Postfix(SpikeStabberScript __instance) {
-        __instance.GetComponent<Animator>().speed = 1;
-        if (Net.IsRunning) {
-            if (NetObjectRegistry.TryGetSyncInfoOrRegister(__instance, out var si)) {
-                if (Net.IsServer) {
-
-                } else {
-                    si.SetIgnoreTimeForRoundTrip();
-                }
-            }
+        __instance.GetComponent<Animator>().speed = 1f;
+        if (Net.IsRunning && NetObjectRegistry.TryGetSyncInfoOrRegister(__instance, out var si) && Net.IsClient) {
+            si.SetIgnoreTimeForRoundTrip();
         }
     }
-
 }
 
 [HarmonyPatch(typeof(JumpPadScript), nameof(JumpPadScript.OnCollisionEnter2D))]
@@ -122,67 +93,76 @@ internal static class JumpPadScript_OnCollisionEnter2D_MultiplayerPatch {
     internal class ShakerState {
         internal Vector2 pos;
         internal Vector2 vel;
+
         internal ShakerState(Shaker s) {
-            pos = s.pos;
-            vel = s.velocity;
+            if (s != null) {
+                pos = s.pos;
+                vel = s.velocity;
+            }
         }
+
         internal void Apply(Shaker s) {
-            s.pos = pos;
-            s.velocity = vel;
+            if (s != null) {
+                s.pos = pos;
+                s.velocity = vel;
+            }
         }
     }
 
     static float cooldownBefore;
 
-    static bool Prefix(JumpPadScript __instance, Collision2D collision, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
+    static bool Prefix(JumpPadScript __instance, Collision2D collision, ref ShakerState __state) {
         cooldownBefore = __instance.cooldown;
-        __state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main.shaker);
-
+        __state = new ShakerState(PlayerCamera.main?.shaker);
 
         try {
-            if (__instance.disabled || !(__instance.cooldown <= 0f) || !collision.rigidbody || collision.rigidbody.isKinematic) {
-
-            } else {
+            if (!__instance.disabled && __instance.cooldown <= 0f && collision.rigidbody && !collision.rigidbody.isKinematic) {
                 if (Util.TryGetBodyFromObject(collision.gameObject, out var bodyObj) && bodyObj.TryGetNetBody(out var nb)) {
                     nb.OnDamageEvent(new BodyDamageEvent(__instance.GetComponent<BuildingEntity>(), nb, 1));
                 }
             }
-        } catch (Exception e) { log.error(e); }
+        } catch (Exception ex) {
+            ModLog.Exception(LogDomain.Combat, nameof(JumpPadScript_OnCollisionEnter2D_MultiplayerPatch), ex);
+        }
 
-        // host ghost should not get launched. the owner already left the pad.
         return !TrapClaim.SkipRemote(collision.collider);
     }
-    static void Postfix(JumpPadScript __instance, Collision2D collision, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
+
+    static void Postfix(JumpPadScript __instance, Collision2D collision, ref ShakerState __state) {
         TrapClaim.JumpFired(__instance, cooldownBefore);
-        if (collision.gameObject.TryGetComponent<Limb>(out var limb)) {
-            if (!limb.IsBodyLocal()) { // reset the camera shake
-                __state.Apply(PlayerCamera.main.shaker);
-            }
+        if (collision.gameObject.TryGetComponent<Limb>(out var limb) && !limb.IsBodyLocal()) {
+            __state?.Apply(PlayerCamera.main?.shaker);
         }
     }
 }
+
 [HarmonyPatch(typeof(CoilScript), nameof(CoilScript.Shock))]
 internal static class CoilScript_Shock_MultiplayerPatch {
     static bool Prefix(CoilScript __instance, Limb limb, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
-        __state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main.shaker);
+        __state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main?.shaker);
 
-        if (TrapClaim.SkipRemote(limb))
+        if (TrapClaim.SkipRemote(limb)) {
             return false;
+        }
 
         try {
             if (__instance.cooldown <= 0f && limb.TryGetNetBody(out var nb)) {
                 nb.OnDamageEvent(new BodyDamageEvent(__instance.GetComponent<BuildingEntity>(), nb, 1));
             }
-        } catch (Exception e) { log.error(e); }
+        } catch (Exception ex) {
+            ModLog.Exception(LogDomain.Combat, nameof(CoilScript_Shock_MultiplayerPatch), ex);
+        }
 
-        if (__instance.cooldown <= 0f && limb.IsBodyLocal())
+        if (__instance.cooldown <= 0f && limb.IsBodyLocal()) {
             TrapClaim.ArmCoil(__instance);
+        }
         return true;
     }
+
     static void Postfix(CoilScript __instance, Limb limb, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
         TrapClaim.FinishCoil(__instance, limb);
-        if (!limb.IsBodyLocal()) { // reset the camera shake
-            __state.Apply(PlayerCamera.main.shaker);
+        if (!limb.IsBodyLocal()) {
+            __state?.Apply(PlayerCamera.main?.shaker);
         }
     }
 }
@@ -193,149 +173,131 @@ internal static class BearTrap_OnCollisionEnter2D_MultiplayerPatch {
 
     static bool Prefix(BearTrap __instance, Collider2D other, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
         sprangId = 0;
-        __state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main.shaker);
+        __state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main?.shaker);
 
-        if (TrapClaim.SkipRemote(other))
+        if (TrapClaim.SkipRemote(other)) {
             return false;
-        if (!__instance.activated)
+        }
+        if (!__instance.activated) {
             sprangId = __instance.GetInstanceID();
+        }
 
         try {
-            if (!__instance.activated && other.TryGetComponent(out Limb component2) && component2.TryGetNetBody(out var nb)) {
+            if (!__instance.activated && other.TryGetComponent(out Limb limb) && limb.TryGetNetBody(out var nb)) {
                 nb.OnDamageEvent(new BodyDamageEvent(__instance.GetComponent<BuildingEntity>(), nb, 1));
             }
-        } catch (Exception e) {
-            log.error(e);
+        } catch (Exception ex) {
+            ModLog.Exception(LogDomain.Combat, nameof(BearTrap_OnCollisionEnter2D_MultiplayerPatch), ex);
         }
 
         return true;
     }
+
     static void Postfix(BearTrap __instance, Collider2D other, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
         if (other != null && other.TryGetComponent<Limb>(out var limb)) {
-            if (sprangId == __instance.GetInstanceID() && limb.IsBodyLocal() && __instance.activated)
+            if (sprangId == __instance.GetInstanceID() && limb.IsBodyLocal() && __instance.activated) {
                 TrapClaim.AfterLocalBear(__instance, limb);
-            if (!limb.IsBodyLocal()) { // reset the camera shake
-                __state.Apply(PlayerCamera.main.shaker);
+            }
+            if (!limb.IsBodyLocal()) {
+                __state?.Apply(PlayerCamera.main?.shaker);
             }
         }
     }
 }
-
 
 [HarmonyPatch(typeof(SpikeStabberScript), nameof(SpikeStabberScript.CheckStab))]
 internal static class SpikeStabberScript_CheckStab_MultiplayerPatch {
     static bool Prefix(SpikeStabberScript __instance, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
-        __state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main.shaker);
+        __state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main?.shaker);
 
-        // the ray is late. the owning client already rolled this on contact.
         if (Net.IsRunning) {
             try {
                 TrapClaim.SpikeFromAnim(__instance);
-            } catch (Exception e) {
-                log.error(e);
+            } catch (Exception ex) {
+                ModLog.Exception(LogDomain.Combat, nameof(SpikeStabberScript_CheckStab_MultiplayerPatch), ex);
             }
             return false;
         }
 
         try {
-
-            var array = System.Linq.Enumerable.ToHashSet(
-                // OG: SpikeStabberScript.CheckStab V7.0.1
+            var targets = Enumerable.ToHashSet(
                 Physics2D.RaycastAll(__instance.transform.position, __instance.transform.up, 6f)
+                    .Select(x => x.transform.GetComponent<Limb>())
+                    .Where(x => x != null)
+                    .Select(x => x.GetNetBody())
+                    .Where(x => x != null));
 
-                .Select(x => x.transform.GetComponent<Limb>()).Where(x => x != null).Select(x => x.GetNetBody()).Where(x => x != null));
-
-            foreach (var item in array) {
+            foreach (var item in targets) {
                 item.OnDamageEvent(new BodyDamageEvent(__instance.GetComponent<BuildingEntity>(), item, 1));
             }
-
-        } catch (Exception e) {
-            log.error(e);
+        } catch (Exception ex) {
+            ModLog.Exception(LogDomain.Combat, nameof(SpikeStabberScript_CheckStab_MultiplayerPatch), ex);
         }
         return true;
     }
+
     static void Postfix(SpikeStabberScript __instance, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
-        if (!KM.DistanceCheck(__instance.transform.position, Camera.main.transform.position, 10)) { // reset the camera shake
-            __state.Apply(PlayerCamera.main.shaker);
+        if (Camera.main != null && !KM.DistanceCheck(__instance.transform.position, Camera.main.transform.position, 10f)) {
+            __state?.Apply(PlayerCamera.main?.shaker);
         }
     }
 }
 
-
-
-
-
-
-
-
 [HarmonyPatch(typeof(MineScript), nameof(MineScript.OnCollisionEnter2D))]
 static class MineScript_OnCollisionEnter2D_MultiplayerPatch {
     static bool Prefix(MineScript __instance, Collision2D collision) {
-        if (__instance.pressed) { // i dont want to trigger postfix on server again
+        if (__instance.pressed) {
             return false;
         }
 
         if (Net.IsRunning) {
             if (Net.IsClient) {
-                // the click is the original. the claim waits out the same 0.8 the host counts.
                 TrapClaim.ArmMine(__instance, collision.collider);
             } else {
-                //OG: MineScript.OnCollisionEnter2D V5t5  only 4 lines  i need to properly check the distance here
-                if ((bool)collision.collider.attachedRigidbody && !collision.collider.attachedRigidbody.isKinematic && NetBody.GetNearestBody(__instance.transform.position, true, false).Item2 < 64f * 64f) {
-                    __instance.pressed = (true);
+                if ((bool)collision.collider.attachedRigidbody
+                    && !collision.collider.attachedRigidbody.isKinematic
+                    && NetBody.GetNearestBody(__instance.transform.position, true, false).Item2 < GameplayRanges.SimulationKeepRadiusSqr) {
+                    __instance.pressed = true;
                     Sound.Play("mine", __instance.transform.position);
                     __instance.GetComponent<SpriteRenderer>().sprite = __instance.pressedSprite;
 
-                    // tell everyone that mine was pressd
                     var writer = Net.CreateWriter(NetmsgId.CLIENT_MineStepped);
-
                     writer.Put((Vector2)__instance.transform.position);
-
                     Net.Server_SendToClients(DeliveryMethod.Unreliable, writer, clientIds: ServerMain.AllClientIdsExceptHost);
-
-                    // WRITER END;
                 }
                 return false;
             }
         }
-
-
         return true;
     }
 }
 
-
 public class TrackerTurret : BaseComponentTracker<TurretScript> {
-
-    bool client_forceshoot = false;
-
     bool last_didBeep = false;
     bool last_didShoot = false;
 
     public float timeSinceFired {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get { return og.timeSinceFired; }
+        get => og.timeSinceFired;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set { og.timeSinceFired = value; }
+        set => og.timeSinceFired = value;
     }
+
     public float beepTime {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get { return og.beepTime; }
+        get => og.beepTime;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set { og.beepTime = (value); }
+        set => og.beepTime = value;
     }
+
     public bool didShoot {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get { return og.didShoot; }
+        get => og.didShoot;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set { og.didShoot = (value); }
+        set => og.didShoot = value;
     }
 
-
-
-    protected override void TrackerAwake() {
-
-    }
+    protected override void TrackerAwake() { }
 
     public void NudgeShoot() {
         if (didShoot) {
@@ -345,188 +307,125 @@ public class TrackerTurret : BaseComponentTracker<TurretScript> {
         beepTime = 0.5f;
         didShoot = false;
     }
+
     public void NudgeBeep(bool isVisible) {
         if (!og.didBeep || (beepTime >= 0.5f && timeSinceFired > 14f)) {
             last_didBeep = false;
             didShoot = false;
-            beepTime = (isVisible ? 0f : (-0.5f));
+            beepTime = isVisible ? 0f : -0.5f;
             Sound.Play("turretsee", base.transform.position, twoDimensional: true, pitchShift: false);
             og.didBeep = true;
         }
     }
 
-
-
     void Update() {
-        if (!Net.IsRunning) return;
-
-        float dist = 999999;
-
+        if (!Net.IsRunning) {
+            return;
+        }
 
         SyncInfo si = null;
-        if (Net.IsClient) { // make the turret not shoot if im client, only when specifically requested by the server 
-
-            dist = KM.DistanceSqr(PlayerCamera.main.transform.position, this.transform.position);
-
-
-            //if (!client_forceshoot) {
-            //    didShoot = false;
-            //    beepTime = 0f;
-            //} 
-            //if (client_forceshoot && didShoot) {
-            //    client_forceshoot = false;
-            //}
-
+        if (Net.IsClient) {
             NetObjectRegistry.SyncRegistry.TryGetValue(gameObject, out si);
-
         } else {
-
-            dist = NetBody.GetNearestBody(this.transform.position, true, false).Item2;
-
-            if (dist < 10000) {
-                // just register it
-                if (NetObjectRegistry.TryGetSyncInfoOrRegister(gameObject, out si)) {
-                }
-
+            float dist = NetBody.GetNearestBody(transform.position, true, false).Item2;
+            if (dist < 10000f) {
+                NetObjectRegistry.TryGetSyncInfoOrRegister(gameObject, out si);
             }
         }
 
-
-
-
         if (!last_didBeep && og.didBeep) {
             if (Net.IsClient) {
-
                 var writer = Net.CreateWriter(NetmsgId.SERVER_TurretDoBeep);
                 writer.Put((Vector2)transform.position);
                 writer.Put(og.spr.isVisible);
                 Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
-                // WRITER END;
-
             } else {
                 NetObjectRegistry.SafeNewGO(gameObject);
-
                 if (si != null || NetObjectRegistry.TryGetSyncInfo(gameObject, out si)) {
-
                     var writer = Net.CreateWriter(NetmsgId.CLIENT_TurretDoBeep_Relay);
                     writer.Put(si.syncId);
-                    writer.Put((bool)(beepTime >= 0));
+                    writer.Put(beepTime >= 0f);
                     Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, ServerMain.AllClientIdsExceptHost);
-                    // WRITER END;
-
                 }
-
             }
         }
 
-
-
-
         if (!last_didShoot && didShoot) {
-
             if (Net.IsServer) {
                 if (si != null || NetObjectRegistry.TryGetSyncInfo(gameObject, out si)) {
                     Multiplayer.Server_SendRelayMessageToClients((byte)NetmsgId.CLIENT_TurretDoShoot_Relay, si.syncId, true, false);
                 }
-            } else {
-                if (ScavPlayer.LocalPlayer.TryGetNetBody(out var nb)) {
-                    nb.SetNetHealthSyncIgnoreTime();
-                }
+            } else if (ScavPlayer.LocalPlayer.TryGetNetBody(out var nb)) {
+                nb.SetNetHealthSyncIgnoreTime();
             }
         }
-
 
         last_didBeep = og.didBeep;
         last_didShoot = didShoot;
     }
 
-
     [ServerReceiver((byte)NetmsgId.SERVER_TurretDoBeep)]
-    static void Server_TurretDoBeep(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        //log.l($"TurretDoBeep actually works lol {clientId} ");
-#endif
+    static void Server_TurretDoBeep(knetid clientId, NetDataReader reader) {
         reader.Get(out Vector2 turretpos);
         reader.Get(out bool isVisible);
 
+        if (!ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out var plr, out var body) || body == null || !body.alive) {
+            return;
+        }
 
-        if (ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out var plr, out var body) && body.alive) {
+        if (!KM.DistanceCheck_PreSqr(turretpos, (Vector2)body.transform.position, 10000f)) {
+            return;
+        }
 
-            if (KM.DistanceCheck_PreSqr(turretpos, (Vector2)body.transform.position, 10000f)) {
+        if (Math.Abs(turretpos.y - body.transform.position.y) > 8f) {
+            ModLog.Debug($"TurretDoBeep rejected: vertical delta > 8 for {plr}", LogDomain.Combat);
+            return;
+        }
 
-
-                // tur   -39 -> -41
-                // plr down: -46
-                // plr up: -33
-                // so about 7 blocks
-
-                if (Math.Abs(turretpos.y - body.transform.position.y) > 8) { // if hes not on the same level as the turret, tell its sus
-
-                    log.l($"TurretDoBeep  turret IS NOT ON THE SAME LEVEL AS THE PLR  BRAAHH !!! ");
-                    return;
+        var touching = Physics2D.OverlapCircleAll(turretpos, 1f);
+        foreach (var col in touching) {
+            if (col.TryGetComponent<TurretScript>(out var turret) && (Vector2)turret.transform.position == turretpos) {
+                var tst = turret.GetOrAddComponent<TrackerTurret>();
+                tst.NudgeBeep(isVisible);
+                if (DebugHelp._DEV_VISUALISE_NET_EVENTS) {
+                    DebugHelp.OnNetEvent(turretpos, $"S: TurretDoBeep {plr}");
                 }
-
-
-                var touching = Physics2D.OverlapCircleAll(turretpos, 1f);
-
-                foreach (var item2 in touching) {
-
-                    if (item2.TryGetComponent<TurretScript>(out var i) && (Vector2)i.transform.position == turretpos) {
-                        var tst = i.GetOrAddComponent<TrackerTurret>();
-                        tst.NudgeBeep(isVisible);
-
-                        if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(turretpos, $"S: TurretDoBeep {plr} ");
-                        return;
-                    }
-                }
-
-                log.l($"TurretDoBeep  turret was not found !!!!!!!!!!!!!!!!!!!!!!!! ");
-
+                return;
             }
         }
+        ModLog.Debug("TurretDoBeep: target turret not found at reported position", LogDomain.Combat);
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_TurretDoBeep_Relay)]
-    static void Client_TurretDoBeep_Relay(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        //log.l($"CLIENT TurretDoBeep_Relay actually works lol {_serverid} ");
-#endif
+    static void Client_TurretDoBeep_Relay(knetid _, NetDataReader reader) {
         reader.Get(out knetid turretid);
         reader.Get(out bool isVisible);
 
-        if (NetObjectRegistry.TryGetSyncInfo(turretid, out var si)) {
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(si.go.transform.position, $"C: TurretDoBeep_Relay  ");
-
+        if (NetObjectRegistry.TryGetSyncInfo(turretid, out var si) && si.go != null) {
+            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) {
+                DebugHelp.OnNetEvent(si.go.transform.position, "C: TurretDoBeep_Relay");
+            }
             var tst = si.go.GetOrAddComponent<TrackerTurret>();
             tst.NudgeBeep(isVisible);
         }
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_TurretDoShoot_Relay)]
-    static void Client_TurretDoShoot_Relay(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+    static void Client_TurretDoShoot_Relay(knetid _, NetDataReader reader) {
         reader.Get(out knetid turretid);
 
-        if (NetObjectRegistry.TryGetSyncInfo(turretid, out var si)) {
-
+        if (NetObjectRegistry.TryGetSyncInfo(turretid, out var si) && si.go != null) {
             var tst = si.go.GetOrAddComponent<TrackerTurret>();
-
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(si.go.transform.position, $"C: TurretDoShoot_Relay cur_shoot:{tst.didShoot}  ");
-
+            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) {
+                DebugHelp.OnNetEvent(si.go.transform.position, $"C: TurretDoShoot_Relay cur_shoot:{tst.didShoot}");
+            }
             tst.NudgeShoot();
-
         }
     }
-
 }
 
-
-
-
-// i basically rewrote the entire sound cannon here
 public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
-
     bool announced_charge = false;
-
 
     public bool charging = false;
     public bool spent = false;
@@ -536,102 +435,86 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
     public float maxDistance = 50f;
     public float chargeTime = 0f;
 
-
-    // host spent state. barrel z is the angle it froze on.
     public void soundcannon_spent(float angle) {
         endAngle = angle;
         hostLocked = true;
-        (og).spent = true;
+        og.spent = true;
         PointBarrel(angle);
-        // a charge that already started still gets to fire
-        if (charging && chargeTime > 1f && !spent)
+        if (charging && chargeTime > 1f && !spent) {
             return;
+        }
         spent = true;
         charging = false;
     }
 
     void PointBarrel(float angle) {
-        if (transform.childCount == 0)
+        if (transform.childCount == 0) {
             return;
+        }
         transform.GetChild(0).eulerAngles = new Vector3(0f, 0f, angle);
     }
 
     void PullHostSpent() {
-        if (Net.IsServer || hostLocked)
+        if (Net.IsServer || hostLocked) {
             return;
-        if (NetObjectRegistry.TryGetSyncInfo(gameObject, out var si) && si.specialdata1.Value != 0)
+        }
+        if (NetObjectRegistry.TryGetSyncInfo(gameObject, out var si) && si.specialdata1.Value != 0) {
             soundcannon_spent(si.specialdata2.Value);
+        }
     }
 
     void PublishSpent() {
-        if (!Net.IsServer)
+        if (!Net.IsServer || !NetObjectRegistry.TryGetSyncInfo(gameObject, out var si)) {
             return;
-        if (!NetObjectRegistry.TryGetSyncInfo(gameObject, out var si))
-            return;
+        }
         si.specialdata1.Value = 1;
         si.specialdata2.Value = endAngle;
     }
 
+    protected override void TrackerAwake() { }
 
-    protected override void TrackerAwake() {
-
-    }
-
-
-
-    //OG: SoundCannon.CanSeePos    copypasted cuz shits private
     public static bool CanSeePos(Transform me, Vector2 to) {
-        RaycastHit2D[] array = Physics2D.LinecastAll(me.transform.position, to, LayerMask.GetMask("Ground"));
-        bool flag = false;
-        RaycastHit2D[] array2 = array;
-        foreach (RaycastHit2D raycastHit2D in array2) {
-            if (raycastHit2D.transform != me.transform) {
-                flag = true;
-                break;
+        RaycastHit2D[] array = Physics2D.LinecastAll(me.transform.position, to, PhysicsLayers.GroundMask);
+        foreach (RaycastHit2D hit in array) {
+            if (hit.transform != me.transform) {
+                return false;
             }
         }
-        return !flag;
+        return true;
     }
 
-
-    // returns just closest body if none are visible
     public static NetBody GetClosestVisibleBody(Transform me) {
-
-        NetBody closestbody = null;
-        var closestdist = 99999999999f;
-
-        NetBody closestvisiblebody = null;
-        var closestvisibledist = 9999999999f;
+        NetBody closestBody = null;
+        float closestDist = 99999999999f;
+        NetBody closestVisibleBody = null;
+        float closestVisibleDist = 9999999999f;
 
         foreach (var item in ScavPlayer.BodyToPlayerDict) {
-
-            var headpos = item.Value.netBody.GetHeadPos();
-
-            var dist = KM.DistanceSqr(me.position, headpos);
-
-            if (dist < closestdist) {
-                closestdist = dist;
-                closestbody = item.Value.netBody;
+            if (item.Value?.netBody == null) {
+                continue;
             }
+            Vector2 headpos = item.Value.netBody.GetHeadPos();
+            float dist = KM.DistanceSqr(me.position, headpos);
 
-            if (dist < closestvisibledist && CanSeePos(me, headpos)) {
-                closestvisibledist = dist;
-                closestvisiblebody = item.Value.netBody;
+            if (dist < closestDist) {
+                closestDist = dist;
+                closestBody = item.Value.netBody;
+            }
+            if (dist < closestVisibleDist && CanSeePos(me, headpos)) {
+                closestVisibleDist = dist;
+                closestVisibleBody = item.Value.netBody;
             }
         }
-
-        return closestvisiblebody ?? closestbody;
+        return closestVisibleBody ?? closestBody;
     }
 
-
-
-    // the original  Update() is disabled, because the entire funcion is inflexible
     void Update() {
         PullHostSpent();
 
         if (spent) {
-            if (hostLocked)
+            if (hostLocked) {
                 PointBarrel(endAngle);
+            }
             return;
         }
 
@@ -640,123 +523,99 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
         }
         if (!Net.IsRunning) {
             Destroy(this);
+            return;
         }
-
 
         checkTime -= Time.deltaTime;
         if (checkTime < 0f) {
             checkTime = Net.IsClient ? 0.4f : 0.1f;
 
-            if (!NetObjectRegistry.TryGetSyncInfo(gameObject, out var _si) && ScavPlayer.GetDistanceToNearestLivingPlayer(transform.position).Item2 < 128f) {
-#if DEBUG
-                log.l($"DELETEME: Force registering sound cannon ");
-#endif
+            if (!NetObjectRegistry.TryGetSyncInfo(gameObject, out _) && ScavPlayer.GetDistanceToNearestLivingPlayer(transform.position).Item2 < 128f) {
                 NetObjectRegistry.NewGO(gameObject);
                 return;
             }
 
             if (!charging && !spent) {
-
                 foreach (var item in ScavPlayer.BodyToPlayerDict) {
-
-                    var headpos = item.Key.limbs[(int)Body.LimbNum.Head].transform.position;
-
-                    if (KM.DistanceCheck(transform.position, headpos, maxDistance) && CanSeePos(this.transform, headpos)) {
+                    if (item.Key?.limbs == null || !AnatomyConstants.IsValidLimbIndex(item.Key, (int)LimbIndex.Head)) {
+                        continue;
+                    }
+                    Vector2 headpos = item.Key.limbs[(int)LimbIndex.Head].transform.position;
+                    if (KM.DistanceCheck(transform.position, headpos, maxDistance) && CanSeePos(transform, headpos)) {
                         charging = true;
                         break;
                     }
                 }
-
             }
         }
 
-        if (!NetObjectRegistry.TryGetSyncInfo(gameObject, out var si)) {
+        if (!NetObjectRegistry.TryGetSyncInfo(gameObject, out var si) || !charging) {
             return;
         }
 
-        if (!charging) {
-            return;
-        }
         if (!announced_charge) {
             Sound.Play("sonarcharge", base.transform.position, twoDimensional: true, pitchShift: false);
-
-            if (Net.IsRunning) {
-                if (Net.IsClient) {
-                } else {
-#if DEBUG
-                    log.l($"DELETEME: sending SoundCannonISCHARGING!!!! ");
-#endif
-                    Multiplayer.Server_SendRelayMessageToClients((byte)NetmsgId.CLIENT_SoundCannonISCHARGING____, si.syncId, true, false);
-
-                }
+            if (Net.IsRunning && Net.IsServer) {
+                Multiplayer.Server_SendRelayMessageToClients((byte)NetmsgId.CLIENT_SoundCannonISCHARGING____, si.syncId, true, false);
             }
             announced_charge = true;
-
         }
         chargeTime += Time.deltaTime;
 
-
-        var closestplayerbody = GetClosestVisibleBody(this.transform);
-        var closestbody = closestplayerbody.body;
-
-        Vector2 nearestplrpos = closestbody.transform.position;
-        Vector2 nearestheadpos = closestplayerbody.GetHeadPos();
-
-        var goallookdir = -KM.NormalTo(nearestheadpos, base.transform.position, out var distance);
-
-        if (hostLocked)
-            PointBarrel(endAngle);
-        else
-            base.transform.GetChild(0).eulerAngles = new Vector3(0f, 0f, Mathf.LerpAngle(base.transform.GetChild(0).eulerAngles.z, Vector2.SignedAngle(Vector2.up, goallookdir), Time.deltaTime * 4f));
-
-        var current_lookdir = base.transform.GetChild(0).up;
-
-
-        if ((chargeTime < 5f)) {
+        var closestPlayerBody = GetClosestVisibleBody(transform);
+        if (closestPlayerBody == null || closestPlayerBody.body == null) {
             return;
         }
+
+        Vector2 nearestHeadPos = closestPlayerBody.GetHeadPos();
+        Vector2 goalLookDir = -KM.NormalTo(nearestHeadPos, base.transform.position, out _);
+
+        if (hostLocked) {
+            PointBarrel(endAngle);
+        } else if (base.transform.childCount > 0) {
+            base.transform.GetChild(0).eulerAngles = new Vector3(
+                0f,
+                0f,
+                Mathf.LerpAngle(base.transform.GetChild(0).eulerAngles.z, Vector2.SignedAngle(Vector2.up, goalLookDir), Time.deltaTime * 4f));
+        }
+
+        Vector2 currentLookDir = base.transform.childCount > 0 ? (Vector2)base.transform.GetChild(0).up : Vector2.up;
+        if (chargeTime < 5f) {
+            return;
+        }
+
         spent = true;
         charging = false;
-
-        (og).spent = (true);
-        if (hostLocked)
+        og.spent = true;
+        if (hostLocked) {
             PointBarrel(endAngle);
-        else if (Net.IsServer) {
-            if (transform.childCount > 0)
+        } else if (Net.IsServer) {
+            if (transform.childCount > 0) {
                 endAngle = transform.GetChild(0).eulerAngles.z;
+            }
             PublishSpent();
         }
 
-
         foreach (var plr in ScavPlayer.AllLivingPlayers) {
-
             var body = plr.body;
-            var headpos = plr.netBody.GetHeadPos();
+            if (body == null || plr.netBody == null) {
+                continue;
+            }
+            Vector2 headpos = plr.netBody.GetHeadPos();
+            Vector2 goalDirForPlr = -KM.NormalTo(headpos, base.transform.position, out _);
+            float dot = Vector2.Dot(currentLookDir, goalDirForPlr);
+            bool inSameEnvironment = FluidManager.main.HasLiquid(WorldGeneration.world.WorldToBlockPos(base.transform.position)) == body.inWater;
 
-
-            var gaollookdirforthisplr = -KM.NormalTo(headpos, base.transform.position, out var distance_to_this_plr);
-
-            var dot = Vector2.Dot(current_lookdir, gaollookdirforthisplr);
-
-#if DEBUG
-            log.l($"DELETEME: FIRING SOUND CANNON!!!!!!!!!: {plr.playerName} dot: {dot} ");
-#endif
-
-            var insameenvironment = FluidManager.main.HasLiquid(WorldGeneration.world.WorldToBlockPos(base.transform.position)) == body.inWater;
-
-
-            if (CanSeePos(this.transform, headpos) && dot > 0.55f && insameenvironment) {
-
-                //OG: SoundCannon.Update
-
+            if (CanSeePos(transform, headpos) && dot > 0.55f && inSameEnvironment) {
                 if (body.bodyAffect.wasWater) {
-                    if (plr.IsLocal)
+                    if (plr.IsLocal) {
                         Sound.Play("sonarmegaouchfixed", base.transform.position, twoDimensional: true, pitchShift: false, null, 1f, 1f, noReverb: false, ignoreMixer: true);
+                    }
                     body.hearingLoss = 100f;
                     body.internalBleeding += 100f;
                     body.happiness -= 10f;
                     body.shock = 100f;
-                    body.limbs[0].pain = 100f;
+                    body.limbs[(int)LimbIndex.Head].pain = 100f;
                     body.brainHealth -= 20f;
                     if (plr.IsLocal) {
                         PlayerCamera.main.shaker.Shake(3000f);
@@ -764,13 +623,14 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
                         PlayerCamera.main.globalMuteTime += 120f;
                     }
                 } else {
-                    if (plr.IsLocal)
+                    if (plr.IsLocal) {
                         Sound.Play("sonarouch", base.transform.position, twoDimensional: true, pitchShift: false, null, 1f, 1f, noReverb: false, ignoreMixer: true);
+                    }
                     body.hearingLoss += 60f;
-                    body.internalBleeding += UnityEngine.Random.Range(20f, 30f);
+                    body.internalBleeding += Random.Range(20f, 30f);
                     body.happiness -= 2f;
                     body.shock = 65f;
-                    body.limbs[0].pain = 80f;
+                    body.limbs[(int)LimbIndex.Head].pain = 80f;
                     body.brainHealth -= 5f;
                     if (plr.IsLocal) {
                         PlayerCamera.main.shaker.Shake(1000f);
@@ -786,14 +646,11 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
                 body.eyeScareTime = 25f;
                 body.adrenaline += 100f;
                 body.respiratoryRate = 0f;
-                Limb[] limbs = body.limbs;
-                foreach (Limb obj in limbs) {
-                    obj.muscleHealth -= UnityEngine.Random.Range(20f, 30f);
+                foreach (Limb obj in body.limbs) {
+                    obj.muscleHealth -= Random.Range(20f, 30f);
                     obj.pain += 40f;
                 }
-
             } else {
-                //OG: SoundCannon.Update
                 body.consciousness -= 30f;
                 body.eyeScareTime = 4f;
                 if (plr.IsLocal) {
@@ -803,446 +660,16 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
                 }
             }
         }
-
-
     }
 }
-
 
 [HarmonyPatch(typeof(SoundCannon), "Update")]
 public static class SoundCannon_Update_MultiplayerPatch {
     public static bool Prefix(SoundCannon __instance) {
         if (Net.IsRunning) {
             __instance.GetOrAddComponent<TrackerSoundCannon>();
-            return false; // i completely reimplemented it in my tracker component 
-        }
-        return true;
-    }
-}
-
-
-
-
-
-
-[HarmonyPatch(typeof(StalactiteDropper), nameof(StalactiteDropper.Drop))]
-public static class StalactiteDropper_Drop_MultiplayerPatch {
-
-    static void Prefix(StalactiteDropper __instance) {
-        if (Multiplayer.IsNetworkActiveAndIsClient()) {
-            if (NetObjectRegistry.TryGetSyncInfoOrRegister(__instance, out var si)) {
-                si.SetIgnoreTimeForRoundTrip(1.0f + Vector2.Distance(__instance.transform.position, PlayerCamera.main.transform.position) * 0.3f); // let it hit the local player , ima make the damage client authoritative 
-
-            }
-        }
-    }
-
-}
-
-[HarmonyPatch(typeof(StalactiteDropper), nameof(StalactiteDropper.OnWillRenderObject))]
-public static class StalactiteDropper_OnWillRenderObject_MultiplayerPatch {
-
-    static void Prefix(StalactiteDropper __instance) {
-        if (Multiplayer.IsNetworkActiveAndIsClient() &&
-            __instance.GetComponent<Rigidbody2D>().bodyType != RigidbodyType2D.Dynamic // check if its still attached to the ceiling
-        ) {
-
-            //OG: StalactiteDropper.OnWillRenderObject V5t4 
-            RaycastHit2D raycastHit2D = Physics2D.Raycast(__instance.transform.position, Vector2.down, 40f, LayerMask.GetMask("Body", "Limb"));
-            if ((bool)raycastHit2D) {
-
-                if (NetObjectRegistry.TryGetSyncInfoOrRegister(__instance, out var si)) {
-
-                    // check if its actually local player
-                    if (raycastHit2D.collider.TryGetComponent<Limb>(out var l) && Util.IsBodyLocal(l.body)) {
-                    } else if (raycastHit2D.collider.TryGetComponent<Body>(out var b) && Util.IsBodyLocal(b)) {
-                    } else {
-                        return; // if not a local body , return right now 
-                    }
-
-
-                    var cd = __instance.GetOrAddComponent<ScavTraps.DamagingCrateCooldownThing>();
-                    if (!cd.stalagtite_dropped) {
-                        cd.stalagtite_dropped = true;
-
-                        Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_ITriggeredStalactiteDropperDropCounter, si.syncId, false);
-                    }
-
-
-                }
-            }
-
-        }
-    }
-
-
-
-    [ServerReceiver((byte)NetmsgId.SERVER_ITriggeredStalactiteDropperDropCounter)]
-    static void ServerReceiver_ITriggeredStalactiteDropperDropCounter(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-
-        reader.Get(out knetid stalagtite_syncid);
-
-        if (ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var plr, out var pb) && pb.alive &&
-            NetObjectRegistry.TryGetSyncInfo(stalagtite_syncid, out var si) && si.go.TryGetComponent<StalactiteDropper>(out var stlgt)
-        ) {
-            if (pb.transform.position.y < stlgt.transform.position.y && pb.transform.position.y + 50 > stlgt.transform.position.y) {
-                if (Mathf.Abs(pb.transform.position.x - stlgt.transform.position.x) < 5) {
-
-#if !RELEASE
-                    log.l($"SERVER, ITriggeredStalactiteDropperDropCounter actually works lol {DebugHelp.GetPlayerFullDebugString(clientId)}  si:{si} ");
-#endif
-
-                    stlgt.counting = true;
-                }
-            }
-
-        }
-    }
-
-
-
-}
-
-
-[HarmonyPatch(typeof(DamagingCrate), nameof(DamagingCrate.OnCollisionEnter2D))]
-public static class DamagingCrate_OnCollisionEnter2D_MultiplayerPatch {
-
-
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator il) {
-        var codes = new List<CodeInstruction>(instructions);
-        int i = 0;
-        int limbLocalIndex = 1;
-
-        try {
-            // stock 1.0.1: LimbFromObject result is stloc.2 (was stloc.1). early type==-1/0 returns sit above it.
-            int limbStore = -1;
-            for (int c = 0; c < codes.Count; c++) {
-                if (codes[c].ToString().Contains("LimbFromObject")
-                    && c + 1 < codes.Count
-                    && (codes[c + 1].opcode == OpCodes.Stloc_0
-                        || codes[c + 1].opcode == OpCodes.Stloc_1
-                        || codes[c + 1].opcode == OpCodes.Stloc_2
-                        || codes[c + 1].opcode == OpCodes.Stloc_3
-                        || codes[c + 1].opcode == OpCodes.Stloc
-                        || codes[c + 1].opcode == OpCodes.Stloc_S)) {
-                    limbStore = c + 1;
-                    if (codes[limbStore].opcode == OpCodes.Stloc_0) {
-                        limbLocalIndex = 0;
-                    } else if (codes[limbStore].opcode == OpCodes.Stloc_1) {
-                        limbLocalIndex = 1;
-                    } else if (codes[limbStore].opcode == OpCodes.Stloc_2) {
-                        limbLocalIndex = 2;
-                    } else if (codes[limbStore].opcode == OpCodes.Stloc_3) {
-                        limbLocalIndex = 3;
-                    } else if (codes[limbStore].operand is LocalBuilder lb) {
-                        limbLocalIndex = lb.LocalIndex;
-                    } else if (codes[limbStore].operand is int idx) {
-                        limbLocalIndex = idx;
-                    } else if (codes[limbStore].operand is byte b) {
-                        limbLocalIndex = b;
-                    }
-                    break;
-                }
-            }
-            if (limbStore < 0) {
-                throw new Exception("LimbFromObject store not found");
-            }
-
-            // insert just before the type==1 damage branch: ldarg.0 / ldfld type / ldc.i4.1
-            i = -1;
-            for (int c = limbStore + 1; c + 2 < codes.Count; c++) {
-                if (codes[c].opcode != OpCodes.Ldarg_0) {
-                    continue;
-                }
-                string fld = codes[c + 1].ToString();
-                if (!(fld.Contains("DamagingCrate") && fld.Contains("type"))) {
-                    continue;
-                }
-                if (codes[c + 2].opcode != OpCodes.Ldc_I4_1) {
-                    continue;
-                }
-                i = c - 1; // insert after previous insn, before ldarg.0
-                break;
-            }
-            if (i < 0) {
-                throw new Exception("type==1 damage branch not found after LimbFromObject");
-            }
-
-            FieldInfo prevFrameSpeed_field = null;
-            for (int c = 0; c < codes.Count; c++) {
-                if (codes[c].opcode == OpCodes.Ldfld || codes[c].opcode == OpCodes.Ldflda) {
-                    string s = codes[c].ToString();
-                    if (s.Contains("prevFrameSpeed") && codes[c].operand is FieldInfo fi) {
-                        prevFrameSpeed_field = fi;
-                        break;
-                    }
-                }
-            }
-            if (prevFrameSpeed_field == null) {
-                prevFrameSpeed_field = AccessTools.Field(typeof(DamagingCrate), "prevFrameSpeed");
-            }
-            if (prevFrameSpeed_field == null) {
-                throw new Exception("prevFrameSpeed field missing");
-            }
-
-            var newInstructions = new List<CodeInstruction>();
-            newInstructions.Add(new CodeInstruction(OpCodes.Ldarg_0));
-            newInstructions.Add(limbLocalIndex <= 3
-                ? new CodeInstruction(limbLocalIndex == 0 ? OpCodes.Ldloc_0
-                    : limbLocalIndex == 1 ? OpCodes.Ldloc_1
-                    : limbLocalIndex == 2 ? OpCodes.Ldloc_2
-                    : OpCodes.Ldloc_3)
-                : new CodeInstruction(OpCodes.Ldloc_S, limbLocalIndex));
-            newInstructions.Add(new CodeInstruction(OpCodes.Ldarg_0));
-            newInstructions.Add(new CodeInstruction(OpCodes.Ldfld, prevFrameSpeed_field));
-            newInstructions.Add(new CodeInstruction(OpCodes.Call,
-                AccessTools.Method(typeof(ScavTraps), nameof(ScavTraps.DamagingCrate_OnCollisionEnter2D_StolenWithFirstCheck))));
-
-            int insertAt = i + 1;
-            var endofpatch_label = il.DefineLabel();
-            codes[insertAt].labels.Add(endofpatch_label);
-            newInstructions.Add(new CodeInstruction(OpCodes.Brfalse_S, endofpatch_label));
-            newInstructions.Add(new CodeInstruction(OpCodes.Ret));
-            codes.InsertRange(insertAt, newInstructions);
-
-            log.l($"DamagingCrate OnCollisionEnter2D TRANSPILER SUCCESS limbLocal={limbLocalIndex} insertAt={insertAt}");
-        } catch (Exception ex) {
-            log.error($"TRANSPILER: DamagingCrate failed at '{i}'/'{codes.Count}' {ex}");
-        }
-        return codes;
-    }
-
-
-}
-
-
-
-
-
-public class ScavTraps : CasualtiesTogetherSingleton {
-
-    public class DamagingCrateCooldownThing : MonoBehaviour {
-        public bool stalagtite_dropped = false;
-        public double last_hit = -10000000;
-    }
-
-    static readonly Dictionary<int, double> hostCrateHit = new Dictionary<int, double>();
-
-    public static bool HostCrateReady(knetid crate, knetid player) {
-        int key = (crate.id << 16) ^ player.id;
-        double now = Time.realtimeSinceStartupAsDouble;
-        if (hostCrateHit.TryGetValue(key, out var last) && now - last < 1.0)
             return false;
-        hostCrateHit[key] = now;
-        if (hostCrateHit.Count > 400)
-            hostCrateHit.Clear();
+        }
         return true;
     }
-
-
-    //OG: DamagingCrate.OnCollisionEnter2D V5t4 
-    // called only from transpiled section
-    // return false to continue original function
-    public static bool DamagingCrate_OnCollisionEnter2D_StolenWithFirstCheck(object ddddddddd, Limb limb, Vector2 prevFrameSpeed) {
-        var dmgcrate = ddddddddd as DamagingCrate;
-
-
-        var islocal = Util.IsBodyLocal(limb.body);
-        if (!islocal) {
-            limb.body.Ragdoll(); // maybe just ragdoll em just for the illusion 
-            return true;
-        } else {
-            if (Net.IsRunning && !NetObjectRegistry.TryGetSyncInfoOrRegister(dmgcrate, out var si)) {
-                // if is client it will just get deleted
-                if (Net.IsClient) {
-                    return true;
-                }
-            }
-
-
-            var cd = dmgcrate.GetOrAddComponent<DamagingCrateCooldownThing>();
-
-            var timePassed = Time.realtimeSinceStartupAsDouble - cd.last_hit;
-            // make a cooldown instead of the deleter
-
-            cd.last_hit = Time.realtimeSinceStartupAsDouble;
-            if (timePassed < 1f) {
-                return true;
-            }
-
-
-        }
-
-#if !RELEASE
-        log.l($"running DamagingCrate_OnCollisionEnter2D_StolenWithFirstCheck {limb} - {NetObjectRegistry.DebugStringGameObject(dmgcrate.gameObject)}");
-#endif
-
-        var prevspeed = prevFrameSpeed.magnitude;
-
-        DamagingCrate_OnCollisionEnter2D_TheDamagingPartStolen(dmgcrate, limb, prevspeed);
-        return true;
-    }
-
-    //OG: DamagingCrate.OnCollisionEnter2D V5t5 
-    public static void DamagingCrate_OnCollisionEnter2D_TheDamagingPartStolen(DamagingCrate dmgcrate, Limb limb, float prevspeed) {
-
-        var islocal = Util.IsBodyLocal(limb.body);
-
-        if (dmgcrate.type == 1) {
-            if (limb.isHead) {
-                limb.body.consciousness = 20f / limb.GetArmorReduction();
-            }
-            limb.muscleHealth -= prevspeed * 0.75f / limb.GetArmorReduction();
-            limb.skinHealth -= prevspeed / limb.GetArmorReduction();
-            limb.bleedAmount += prevspeed * 0.1f / limb.GetArmorReduction();
-            limb.DamageWearables(0.1f);
-        } else {
-            if (limb.isHead) {
-                limb.body.consciousness = 0f / limb.GetArmorReduction();
-            }
-            limb.muscleHealth -= prevspeed * 1.25f / limb.GetArmorReduction();
-            limb.skinHealth -= prevspeed * 0.6f / limb.GetArmorReduction();
-            limb.bleedAmount += prevspeed * 0.05f / limb.GetArmorReduction();
-            if (Random.value < 0.5f && prevspeed > 25f) {
-                limb.Dislocate();
-            }
-            if (Random.value < 0.5f && prevspeed > 45f) {
-                limb.BreakBone();
-            }
-            limb.DamageWearables(0.25f);
-        }
-
-        Sound.Play(dmgcrate.stalactiteHitSound, dmgcrate.transform.position, twoDimensional: islocal);
-        if (Net.IsRunning) {
-
-            BuildingEntity build = null;
-            if (limb.TryGetNetBody(out var nb) && dmgcrate.TryGetComponent(out build)) {
-#if !RELEASE
-                log.warn($"DamaginCrate damage event actually works! {nb.ToSafeString()} {build.ToSafeString()}");
-#endif
-                nb.OnDamageEvent(new BodyDamageEvent(build, nb, prevspeed));
-            }
-
-
-            if (Net.IsClient) {
-                if (islocal) {
-                    if (NetObjectRegistry.TryGetSyncInfoOrRegister(dmgcrate, out var si)) {
-                        if (limb.TryGetNetBody(out var locnb)) {
-                            locnb.SetNetHealthSyncIgnoreTime(0.05f);
-                        }
-
-#if !RELEASE
-                        log.l($"CLIENT, sending DamagingCrate_OnCollisionEnter2D_hit {prevspeed} ");
-#endif
-
-                        var writer = Net.CreateWriter(NetmsgId.SERVER_DamagingCrate_OnCollisionEnter_D_hit);
-                        writer.Put(si.syncId);
-                        writer.Put(prevspeed);
-                        writer.Put(Util.GetLimbIndex(limb));
-                        Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
-                        // WRITER END;
-                    }
-                }
-            } else if (limb.TryGetNetBody(out var pb)) {
-                ServerMain.Server_AnnounceSound(dmgcrate.transform.position, dmgcrate.stalactiteHitSound, ServerMain.GetListOfClientIdsExceptThisAndHost(pb.netId));
-
-                // force drop the stalagtite if it wasnt dropped yet
-                if (dmgcrate.TryGetComponent<StalactiteDropper>(out var stalagtite) && dmgcrate.GetComponent<Rigidbody2D>().bodyType != RigidbodyType2D.Dynamic) {
-                    stalagtite.Drop();
-                }
-            }
-
-
-        }
-
-
-        limb.body.Ragdoll();
-
-        //if (islocal) { // nah never delete it 
-        //    object.Destroy(dmgcrate);
-        //}
-
-    }
-
-
-    [ServerReceiver((byte)NetmsgId.SERVER_DamagingCrate_OnCollisionEnter_D_hit)]
-    static void ServerReceiver_ClientGotHitBy_DamagingCrate_OnCollisionEnter2D(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-
-        reader.Get(out knetid crate_syncid);
-        reader.Get(out float prevspeed);
-        reader.Get(out byte limbindex);
-
-        if (MedicalSync.TryGetPlayerAndLimb(clientId, limbindex, out var pb, out var limb) && pb.alive && Util.IsFinite(prevspeed) && prevspeed > 4f &&
-            NetObjectRegistry.TryGetSyncInfo(crate_syncid, out var si) && si.go.TryGetComponent(out DamagingCrate dmgcrate)
-        ) {
-#if TESTING
-            log.devevent($"Server recieved: DamagingCrate hit: {si} -> {DebugHelp.GetPlayerFullDebugString(clientId)} force:{Mathf.Round(prevspeed)}", dmgcrate.transform.position);
-#endif
-
-            if (KM.DistanceCheck(dmgcrate.transform.position, limb.GetPosition(), 32)) {
-                if (!ScavTraps.HostCrateReady(crate_syncid, clientId))
-                    return;
-                DamagingCrate_OnCollisionEnter2D_TheDamagingPartStolen(dmgcrate, limb, Mathf.Abs(prevspeed));
-                if (limb.TryGetNetBody(out var hitNb))
-                    TrapClaim.Publish(hitNb);
-                return;
-            } else {
-#if TESTING
-                log.sus($"TOO FAR? DamagingCrate hit: crateId: {crate_syncid} prevspeed:{prevspeed} limbindex:{limbindex}");
-#endif
-            }
-        }
-#if TESTING
-        log.sus($"Weird DamagingCrate hit: crateId: {crate_syncid} prevspeed:{prevspeed} limbindex:{limbindex}");
-#endif
-    }
-
-
-
-
-
-
-    [ClientReceiver((byte)NetmsgId.CLIENT_SoundCannonISCHARGING____)]
-    static void ClientReceiver__SoundCannonISCHARGING(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-
-        reader.Get(out knetid syncid);
-
-        if (NetObjectRegistry.TryGetSyncInfo(syncid, out var si) && si.go.TryGetComponent(out TrackerSoundCannon tr) && !tr.spent) {
-            tr.charging = true;
-        }
-
-    }
-
-
-    // fun fact: this receiver was made wayy before the object registry system, thats why its using a position instead of syncid 
-    [ClientReceiver((byte)NetmsgId.CLIENT_MineStepped)]
-    static void ClientReceiver__MineStepped(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-
-        reader.Get(out Vector2 minepos);
-
-#if DEBUG
-        log.l($"DELETEME: received MineStepped {minepos} ");
-#endif
-
-        Collider2D[] array = Physics2D.OverlapCircleAll(minepos, 2.0f);
-        foreach (Collider2D obj2 in array) {
-            if (obj2.TryGetComponent(out MineScript component)) {
-
-                //OG: MineScript.OnCollisionEnter2D V4 
-                if (!(bool)(component).pressed) {
-                    // disable the mine, and make its sprite like this
-                    Sound.Play("mine", minepos);
-                    component.GetComponent<SpriteRenderer>().sprite = component.pressedSprite;
-                    component.exploded = (true);
-                }
-                break;
-            }
-        }
-
-        // explosion is triggered by server separately
-
-    }
-
-
-
 }

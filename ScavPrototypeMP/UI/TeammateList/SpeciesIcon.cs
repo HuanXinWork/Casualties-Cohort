@@ -1,7 +1,10 @@
-﻿using UnityEngine;
+using UnityEngine;
 
 namespace Together.UI.TeammateList;
 
+/// <summary>
+/// 从原版 <see cref="WoundView.headCharSprites"/> 解析物种标准线稿与高光头像精灵。
+/// </summary>
 internal static class SpeciesIcon {
     private static WoundView _view;
 
@@ -21,10 +24,7 @@ internal static class SpeciesIcon {
         if (view == null || view.headCharSprites == null) {
             return;
         }
-        int index = charType * 2;
-        if (index < 0) {
-            index = 0;
-        }
+        int index = Mathf.Max(0, charType * 2);
         Sprite[] sprites = view.headCharSprites;
         if (index < sprites.Length) {
             head = sprites[index];

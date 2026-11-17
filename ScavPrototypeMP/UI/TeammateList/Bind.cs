@@ -1,10 +1,13 @@
-﻿using BepInEx.Configuration;
+using BepInEx.Configuration;
 using HarmonyLib;
 using System.Collections.Generic;
+using Together.Diagnostics;
 using UnityEngine;
 
 namespace Together.UI.TeammateList {
-    // the game's input tab only lists Setting rows. the bep config never shows up there.
+    /// <summary>
+    /// 将队友列表折叠快捷键注入原版输入设置列表，并与 BepInEx <see cref="KeyboardShortcut"/> 配置双向同步。
+    /// </summary>
     internal static class Bind {
         public const string Id = "teammatelist";
 
@@ -107,12 +110,10 @@ namespace Together.UI.TeammateList {
             if (applyNow) {
                 KeyBinds.CacheBind(row);
             }
-            if (TeammateListHost.Log != null) {
-                TeammateListHost.Log.LogInfo((object)"input row Teammate list added");
-            }
+            ModLog.Debug("Input row 'Teammate list' registered", LogDomain.UI);
         }
 
-        static KeyboardShortcut Current() {
+        private static KeyboardShortcut Current() {
             ConfigEntry<KeyboardShortcut> entry = TeammateListHost.CollapseKey;
             if (entry == null || entry.Value.MainKey == KeyCode.None) {
                 return new KeyboardShortcut(KeyCode.LeftAlt);
@@ -120,7 +121,7 @@ namespace Together.UI.TeammateList {
             return entry.Value;
         }
 
-        static string ShortcutText(KeyboardShortcut key) {
+        private static string ShortcutText(KeyboardShortcut key) {
             string main = KeyText(key.MainKey);
             if (key.Modifiers == null) {
                 return main;
@@ -135,34 +136,31 @@ namespace Together.UI.TeammateList {
                 }
                 mods += KeyText(modifier);
             }
-            if (mods.Length == 0) {
-                return main;
-            }
-            return mods + "+" + main;
+            return mods.Length == 0 ? main : (mods + "+" + main);
         }
 
-        static string KeyText(KeyCode key) {
+        private static string KeyText(KeyCode key) {
             if (key >= KeyCode.Alpha0 && key <= KeyCode.Alpha9) {
                 return ((int)(key - KeyCode.Alpha0)).ToString();
             }
             if (key >= KeyCode.Keypad0 && key <= KeyCode.Keypad9) {
                 return "Num" + (int)(key - KeyCode.Keypad0);
             }
-            switch (key) {
-                case KeyCode.LeftShift: return "LShift";
-                case KeyCode.RightShift: return "RShift";
-                case KeyCode.LeftAlt: return "LAlt";
-                case KeyCode.RightAlt: return "RAlt";
-                case KeyCode.LeftControl: return "LCtrl";
-                case KeyCode.RightControl: return "RCtrl";
-                case KeyCode.Mouse0: return "LMB";
-                case KeyCode.Mouse1: return "RMB";
-                case KeyCode.Mouse2: return "MMB";
-                default: return key.ToString();
-            }
+            return key switch {
+                KeyCode.LeftShift => "LShift",
+                KeyCode.RightShift => "RShift",
+                KeyCode.LeftAlt => "LAlt",
+                KeyCode.RightAlt => "RAlt",
+                KeyCode.LeftControl => "LCtrl",
+                KeyCode.RightControl => "RCtrl",
+                KeyCode.Mouse0 => "LMB",
+                KeyCode.Mouse1 => "RMB",
+                KeyCode.Mouse2 => "MMB",
+                _ => key.ToString(),
+            };
         }
 
-        static KeyCode ShownKey() {
+        private static KeyCode ShownKey() {
             ConfigEntry<KeyboardShortcut> entry = TeammateListHost.CollapseKey;
             if (entry == null || entry.Value.MainKey == KeyCode.None) {
                 return KeyCode.LeftAlt;
@@ -193,7 +191,8 @@ namespace Together.UI.TeammateList {
                 return;
             }
 
-            if (TeammateListHost.CollapseKey.Value.MainKey != configured.MainKey || ModifierCount(TeammateListHost.CollapseKey.Value) != ModifierCount(configured)) {
+            if (TeammateListHost.CollapseKey.Value.MainKey != configured.MainKey
+                || ModifierCount(TeammateListHost.CollapseKey.Value) != ModifierCount(configured)) {
                 TeammateListHost.CollapseKey.Value = configured;
             }
             KeyCode show = configured.MainKey == KeyCode.None ? KeyCode.LeftAlt : configured.MainKey;
@@ -214,13 +213,12 @@ namespace Together.UI.TeammateList {
             return count;
         }
 
-        static SettingKeybind Find(List<Setting> list) {
+        private static SettingKeybind Find(List<Setting> list) {
             if (list == null) {
                 return null;
             }
             for (int i = 0; i < list.Count; i++) {
-                SettingKeybind row = list[i] as SettingKeybind;
-                if (row != null && row.name == Id) {
+                if (list[i] is SettingKeybind row && row.name == Id) {
                     return row;
                 }
             }

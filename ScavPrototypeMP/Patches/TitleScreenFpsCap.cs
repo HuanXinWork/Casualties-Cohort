@@ -38,7 +38,8 @@ internal static class TitleScreenFpsCap {
             Settings.EnsureLoaded();
             SettingInt framerate = Settings.Get<SettingInt>("framerate");
             return framerate != null ? framerate.value : 0;
-        } catch {
+        } catch (Exception ex) {
+            Together.Diagnostics.ModLog.Debug("ReadFramerateSetting fallback: " + ex.Message, Together.Diagnostics.LogDomain.UI);
             return 0;
         }
     }

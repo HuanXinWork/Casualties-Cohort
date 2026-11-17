@@ -1,4 +1,6 @@
 using Together;
+using Together.Diagnostics;
+using Together.MpConstants;
 using CasualtiesTogetherUtils;
 using LiteNetLib;
 using System;
@@ -137,11 +139,11 @@ public class BattleRoyale : GamemodeBase {
         float num = (float)(chunkWidth * chunkHeight) * UnityEngine.Random.Range(minPerChunk, maxPerChunk);
         for (int i = 0; (float)i < num; i++) {
             Vector2 vector = new Vector2(UnityEngine.Random.Range(0L - (long)halfWidth, halfWidth), UnityEngine.Random.Range(0L - (long)halfHeight,  ((float)halfHeight)));
-            if (!(!Physics2D.OverlapPoint(vector, LayerMask.GetMask("Ground")) || spawnInGround)) {
+            if (!(!Physics2D.OverlapPoint(vector, PhysicsLayers.GroundMask) || spawnInGround)) {
                 continue;
             }
 
-            RaycastHit2D raycastHit2D = Physics2D.Raycast(vector, dir, CHUNKSIZE, LayerMask.GetMask("Ground"));
+            RaycastHit2D raycastHit2D = Physics2D.Raycast(vector, dir, CHUNKSIZE, PhysicsLayers.GroundMask);
             if (!raycastHit2D || !(Math.Abs(raycastHit2D.point.x) < (float)halfWidth - 1f) || !(Math.Abs(raycastHit2D.point.y) < (float)halfHeight - 1f) || (checkFunc != null && !checkFunc(world.WorldToBlockPos(raycastHit2D.point - Vector2.up * 0.5f)))) {
                 continue;
             }
@@ -434,7 +436,7 @@ public class BattleRoyale : GamemodeBase {
                 for (int i = 0; i < 40; i++) {
                     var newpos = new Vector2(UnityEngine.Random.Range(-500, 500), UnityEngine.Random.Range(-10 - i * 12, 480));
 
-                    if (Physics2D.OverlapCircle(pos, 2, LayerMask.GetMask("Ground"))) {
+                    if (Physics2D.OverlapCircle(pos, 2, PhysicsLayers.GroundMask)) {
                         continue;
                     } else {
                         var inWater = FluidManager.main.WaterInfo(world.WorldToBlockPos(pos)).Item1 > 0f;
@@ -449,7 +451,7 @@ public class BattleRoyale : GamemodeBase {
                         // find ground
                         for (int e = 0; e < 100; e++) {
                             var nnn = pos - Vector2.up;
-                            if (Physics2D.OverlapCircle(pos, 1, LayerMask.GetMask("Ground"))) {
+                            if (Physics2D.OverlapCircle(pos, 1, PhysicsLayers.GroundMask)) {
                                 break;
                             }
                             pos = nnn;

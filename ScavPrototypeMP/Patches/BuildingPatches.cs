@@ -259,40 +259,44 @@ public static class BatteryRecharger_OnUse_MultiplayerPatch {
 
         return false;
     }
+}
 
-
-
-
+/// <summary>
+/// 电池充电座网络接收器（独立于 <c>[HarmonyPatch]</c> 类以规避值类型参数 <c>Harmony003</c> 告警）。
+/// </summary>
+internal static class BatteryRechargerSync {
     [ServerReceiver((byte)NetmsgId.SERVER_BatteryRechargerOnUse)]
-    static void ServerReceiver_MinigameSchrapnelLocations(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+    private static void ServerReceiver_BatteryRechargerOnUse(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+        reader.Get(out knetid batteryId);
+        reader.Get(out knetid chargerId);
 
-        reader.Get(out knetid batteryid);
-        reader.Get(out knetid chargerid);
-
-        if (ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out var plr, out var body) && body.conscious && NetObjectRegistry.TryGetSyncInfo(batteryid, out var battery_si) && NetObjectRegistry.TryGetSyncInfo(chargerid, out var charger_si)) {
-
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(charger_si.transformPosition, $"BatteryRecharger.OnUse {plr} {battery_si} {charger_si} ");
-
-            Copypasted_OnUse(charger_si.go.GetComponent<BatteryRecharger>(), battery_si.item);
+        if (ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out var plr, out var body)
+            && body.conscious
+            && NetObjectRegistry.TryGetSyncInfo(batteryId, out var batterySi)
+            && NetObjectRegistry.TryGetSyncInfo(chargerId, out var chargerSi)
+            && chargerSi.go != null
+            && KM.DistanceCheck(body, chargerSi.go.transform, Together.MpConstants.GameplayRanges.ServerExchangeToleranceDistance)) {
+            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) {
+                DebugHelp.OnNetEvent(chargerSi.transformPosition, $"BatteryRecharger.OnUse {plr} {batterySi} {chargerSi}");
+            }
+            BatteryRecharger_OnUse_MultiplayerPatch.Copypasted_OnUse(chargerSi.go.GetComponent<BatteryRecharger>(), batterySi.item);
         }
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_BatteryRechargerOnUseRelay)]
-    static void ClientReceiver_MinigameSchrapnelLocations(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+    private static void ClientReceiver_BatteryRechargerOnUseRelay(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+        reader.Get(out knetid batteryId);
+        reader.Get(out knetid chargerId);
 
-        reader.Get(out knetid batteryid);
-        reader.Get(out knetid chargerid);
-
-        if (NetObjectRegistry.TryGetSyncInfo(batteryid, out var battery_si) && NetObjectRegistry.TryGetSyncInfo(chargerid, out var charger_si)) {
-
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(charger_si.transformPosition, $"BatteryRechargerOnUseRelay {battery_si} {charger_si} ");
-
-            Copypasted_OnUse(charger_si.go.GetComponent<BatteryRecharger>(), battery_si.item);
+        if (NetObjectRegistry.TryGetSyncInfo(batteryId, out var batterySi)
+            && NetObjectRegistry.TryGetSyncInfo(chargerId, out var chargerSi)
+            && chargerSi.go != null) {
+            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) {
+                DebugHelp.OnNetEvent(chargerSi.transformPosition, $"BatteryRechargerOnUseRelay {batterySi} {chargerSi}");
+            }
+            BatteryRecharger_OnUse_MultiplayerPatch.Copypasted_OnUse(chargerSi.go.GetComponent<BatteryRecharger>(), batterySi.item);
         }
     }
-
-
-
 }
 
 

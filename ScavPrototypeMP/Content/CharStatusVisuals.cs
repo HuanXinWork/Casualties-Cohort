@@ -2,13 +2,10 @@ using CasualtiesTogetherUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
 using TMPro;
+using Together.Diagnostics;
 using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace Together {
 
@@ -109,12 +106,10 @@ namespace Together {
                     icongo.SetActive(false);
                     icons.Add(item, icinst);
                 } catch (Exception e) {
-                    log.error(e);
+                    ModLog.Exception(LogDomain.UI, "CharStatusVisuals.Awake icon init", e);
                     if (icongo != null) {
                         GameObject.Destroy(icongo);
                     }
-                } finally {
-
                 }
             }
 
@@ -222,8 +217,6 @@ namespace Together {
                     item.icon.SetActive(false);
                 }
             } else {
-
-                Vector2 headpos = netbody.GetHeadPos();
                 const float cooloffset = 5.5f;
 
 

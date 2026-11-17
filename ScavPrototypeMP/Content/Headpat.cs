@@ -3,6 +3,8 @@ using LiteNetLib;
 using LiteNetLib.Utils;
 using System;
 using System.Collections.Generic;
+using Together.Diagnostics;
+using Together.MpConstants;
 using UnityEngine;
 
 namespace Together {
@@ -55,7 +57,7 @@ namespace Together {
 
         [CTPostInit]
         static void Init() {
-            ServerMain.ServerCustomCommandsDict["pat_done"] = (plr, cmd, args) => {
+            ServerMain.ServerCustomCommandsDict[CustomWireCommands.PatDone] = (plr, cmd, args) => {
                 if (plr == null || args == null || args.Length < 2 || !ushort.TryParse(args[1], out ushort targetId)) {
                     return;
                 }
@@ -64,7 +66,7 @@ namespace Together {
                 }
                 Finish(plr, victim);
             };
-            ClientMain.ClientCustomCommandsDict["pat_fx"] = (cmd, reader) => {
+            ClientMain.ClientCustomCommandsDict[CustomWireCommands.PatFx] = (cmd, reader) => {
                 reader.Get(out ushort id);
                 if (!NetBody.TryGetNetBodyFromId(id, out NetBody who)) {
                     return;
@@ -198,8 +200,8 @@ namespace Together {
                 Finish(self.plr, target);
                 return;
             }
-            NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
-            writer.Put("pat_done " + target.netId.id.ToString());
+            NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+            writer.Put(CustomWireCommands.PatDone + " " + target.netId.id);
             Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
         }
 
@@ -222,8 +224,8 @@ namespace Together {
                 MedicalSync.Server_QueueSendCharacterHealth(victim, true);
             }
             PlayFx(victim);
-            NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
-            writer.Put("pat_fx");
+            NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+            writer.Put(CustomWireCommands.PatFx);
             writer.Put(victim.netId.id);
             Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, ServerMain.AllClientIdsExceptHost);
         }
@@ -398,7 +400,8 @@ namespace Together {
         static float ShakeForce() {
             try {
                 return WorldGeneration.GetRunSettingFloat("minigamehandshake");
-            } catch {
+            } catch (Exception ex) {
+                ModLog.Debug("HeadpatSession.ShakeForce fallback: " + ex.Message, LogDomain.UI);
                 return 1f;
             }
         }

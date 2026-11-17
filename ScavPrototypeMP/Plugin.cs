@@ -1,42 +1,29 @@
-
-
-
 using BepInEx;
 using BepInEx.Logging;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using KrokV5Optimization;
-using LiteNetLib;
-using LiteNetLib.Utils;
-using Steamworks;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
-using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using Together;
+using Together.Diagnostics;
 using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 using UnityEngine.UI;
-
-
 
 namespace Together {
 
-
     [BepInProcess("CasualtiesUnknown.exe")]
     [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
-    public class Plugin : BaseUnityPlugin {
+    public partial class Plugin : BaseUnityPlugin {
         internal static ManualLogSource log;
         internal static new ManualLogSource Logger => log;
         internal const string FORCEDISABLE_PLAYERPREF_KEY = "CasualtiesMP_FORCE_DISABLE_MP_MOD";
         public static Plugin main { get; private set; }
-
 
         internal Harmony harmony;
 
@@ -75,11 +62,16 @@ namespace Together {
         public readonly static bool IS_FULLGAME_BUILD = false;
 #endif
 
-
         public static GameObject s;
 
         public readonly static bool OG_RUNINGACKGROUND = false;
 
+        public static bool SUCCESFULLY_INITIALIZED { get; private set; }
+        public static bool FORCE_DISABLE_MP_MOD { get; private set; }
+        public static bool FORCE_NO_STEAM { get; private set; }
+        public static bool AnyCmdArgsPassed { get; private set; }
+
+        public static event Action OnInitFinish;
 
         internal class LoadErrorNotifier : MonoBehaviour {
             public static string errorstr = "";
@@ -135,7 +127,6 @@ namespace Together {
         }
 
         public static void RestartGame() {
-
             try {
 #if !DONT_RESTART_IF_RESTART_BULLSHIT
                 try {
@@ -146,7 +137,6 @@ namespace Together {
                 } catch (System.Exception e) {
                     Together.log.error("STEAM RESTART FAILED " + e.ToString());
                 }
-
 #endif
             } catch (System.Exception e3) {
                 UnityEngine.Debug.LogError("GAME RESTART FAILED:" + e3.ToString());
@@ -155,42 +145,34 @@ namespace Together {
             Application.Quit();
         }
 
-
         private void Awake() {
-
             main = this;
             s = this.gameObject;
 
             SUCCESFULLY_INITIALIZED = false;
 
-#if !RELEASE 
+#if !RELEASE
             Application.runInBackground = true;
             DebugMenuSettings.is_verbose = true;
             DebugMenuSettings._DEV_VISUALISE_NET_EVENTS = true;
             Chat._DEV_LOG_CHAT = true;
-#endif 
+#endif
 
-            // to prevent it from being deleted by unity, same as the  HideManagerGameObject in config, but i do it forcefully
+            // to prevent it from being deleted by unity, same as the HideManagerGameObject in config, but i do it forcefully
             gameObject.hideFlags = HideFlags.HideAndDontSave;
 
             log = base.Logger;
-            //log = BepInEx.Logging.Logger.CreateLogSource("Krokosha_MP_CU");
-            // Multiplayer Co-op Mod for Casualties: Unknown
-
+            ModLog.Init(Logger);
 
             try {
                 Awake_Stage1(); // that later calls stage 2
             } catch (Exception e) {
-                log.LogError("Awake_Stage1: " + e.ToString());
+                ModLog.Exception(LogDomain.Core, nameof(Awake_Stage1), e);
             }
             OnInitFinish?.Invoke();
         }
 
-        public static event Action OnInitFinish;
-
-
         void Awake_Stage1() {
-
             try {
                 FORCE_DISABLE_MP_MOD = PlayerPrefsExtended.GetBool(FORCEDISABLE_PLAYERPREF_KEY, FORCE_DISABLE_MP_MOD);
             } catch (Exception e) {
@@ -230,9 +212,6 @@ namespace Together {
             Awake_Stage2();
         }
 
-
-
-
         void _PickUsername() {
             try {
                 if (KSteam.Loaded) {
@@ -243,21 +222,18 @@ namespace Together {
                 log.LogError("_PickName: " + e.ToString());
             }
             UIMainMenu.USERINPUT_NAME = "Player" + UnityEngine.Random.Range(0, 9999).ToString();
-
         }
 
-
-
-
         void Awake_Stage2() {
+            // 初始化结构化双模日志门面与脱敏异常自动上报中心
+            ModLog.Init(Logger);
+            MpDiagnosticReporter.Install();
 
 #if PLAYTEST
             DebugMenuSettings.is_verbose = true;
             DebugMenuSettings._DEV_VISUALISE_NET_EVENTS = true;
             Chat._DEV_LOG_CHAT = true;
 #endif
-
-
 
             harmony = new Harmony(MyPluginInfo.PLUGIN_GUID);
             OptimizerMain.Log = Logger;
@@ -300,10 +276,7 @@ namespace Together {
 
 #if !RELEASE
             Multiplayer.INPUT_PASSWORD = "AMOGUS";
-#elif PLAYTEST
-            //Multiplayer.INPUT_PASSWORD = "PLAYTEST";
 #endif
-
 
             try {
                 CoopModAssets.LoadAssets();
@@ -317,20 +290,14 @@ namespace Together {
 
             log.LogInfo($"Plugin {MyPluginInfo.PLUGIN_GUID} assets loaded!");
 
-            // MULTIPLAYER
-            // also create my global object that will track everything
-
             Multiplayer mainsingleton = this.AddComponent<Multiplayer>();
-
 
             try {
                 Multiplayer._FIRST_INIT();
                 log.LogInfo($"Created multiplayer singleton GameObject!");
             } catch (Exception e) {
-
                 Together.log.error($"{MyPluginInfo.PLUGIN_GUID} {Plugin.FULL_MOD_VERSION} failed to load!\n\n{e}\n");
                 LoadErrorNotifier.errorstr += "\n" + e.ToString();
-
 
                 this.AddComponent<LoadErrorNotifier>();
                 Component.Destroy(mainsingleton);
@@ -341,32 +308,29 @@ namespace Together {
 
             GlobalDark_Awake_MultiplayerPatch.SetBetaBuildMPText();
 
-
             try {
                 OptimizerMain.Install();
             } catch (Exception e) {
-                log.LogError(e);
+                ModLog.Exception(LogDomain.Core, "OptimizerMain.Install", e);
             }
 
             try {
                 FindTheBugInator.Install();
             } catch (Exception e) {
-                log.LogError("findthebuginator: " + e);
+                ModLog.Exception(LogDomain.Core, "FindTheBugInator.Install", e);
             }
 
             try {
                 UI.TeammateList.TeammateListHost.Init(this);
             } catch (Exception e) {
-                log.LogError("TeammateList init: " + e);
+                ModLog.Exception(LogDomain.UI, "TeammateListHost.Init", e);
             }
 
             base.StartCoroutine(DelayedDelayedTestGameStartImmidiate());
         }
 
-
         void DoHarmonyPatchAll(Harmony harmony) {
             List<Type> patchTypes = GetHarmonyPatchesInNamespaces("Together", "CasualtiesMultiplayerAPI", "CasualtiesTogetherUtils");
-            //harmony.PatchAll(); // i can do later: harmony.UnpatchSelf();
 
             foreach (Type patch in patchTypes) {
                 try {
@@ -376,6 +340,7 @@ namespace Together {
                 }
             }
         }
+
         public static List<Type> GetHarmonyPatchesInNamespaces(params string[] namespaces) {
             return Assembly.GetExecutingAssembly()
                 .GetTypesSafely()
@@ -389,14 +354,14 @@ namespace Together {
         }
 
         void MultiplayerUnpatch() {
+            MpDiagnosticReporter.Uninstall();
             if (harmony != null) {
                 try {
                     harmony.UnpatchSelf();
                     harmony = null;
                 } catch (Exception e) {
-                    log.LogError(e);
+                    ModLog.Exception(LogDomain.Core, nameof(MultiplayerUnpatch), e);
                 }
-
             }
             if (Multiplayer.Singletons != null) {
                 foreach (Component item in Multiplayer.Singletons) {
@@ -413,9 +378,7 @@ namespace Together {
             }
         }
 
-
-
-        public static void StartCoroutine(IEnumerator f) {
+        public static new void StartCoroutine(IEnumerator f) {
             s.GetComponent<Multiplayer>().StartCoroutine(f);
         }
 
@@ -425,12 +388,17 @@ namespace Together {
         }
 
         private void OnDestroy() {
+            MpDiagnosticReporter.Uninstall();
             try {
                 OptimizerMain.Shutdown();
-            } catch (Exception e) { }
+            } catch (Exception e) {
+                ModLog.Exception(LogDomain.Core, "Plugin.OnDestroy.OptimizerShutdown", e);
+            }
             try {
                 Net.ShutdownReset();
-            } catch (Exception e) { }
+            } catch (Exception e) {
+                ModLog.Exception(LogDomain.Transport, "Plugin.OnDestroy.NetShutdown", e);
+            }
             Together.log.l("Plugin.OnDestroy()");
         }
 
@@ -455,824 +423,6 @@ namespace Together {
 #if !RELEASE
             SkipWarningScreen();
 #endif
-        }
-
-        public static bool SUCCESFULLY_INITIALIZED { get; private set; }
-        public static bool FORCE_DISABLE_MP_MOD { get; private set; }
-        public static bool FORCE_NO_STEAM { get; private set; }
-        public static bool AnyCmdArgsPassed { get; private set; }
-
-        public static List<string> commands_to_run = new();
-        public static string test_scenario = null;
-        public static bool dump_game_ids { get; private set; }
-        public static bool start_network { get; private set; }
-        public static bool do_immidiate_start { get; private set; }
-        public static int startworld { get; private set; }
-        public static bool plrname_override { get; private set; }
-        public static bool rules_override { get; private set; }
-        static string current_rule_to_set;
-
-        public static bool cmd_start__steam_lobby = false;
-        public static string cmd_start__steam_lobby_type = "public";
-        public static bool cmd_start__is_client = false;
-        public static bool cmd_start__is_dedicated_server = false;
-        public static bool cmd_autobrowser = false;
-        public static float cmd_autobrowser_delay = 5f;
-        // after browser refresh, join first joinable lobby whose name contains this substring
-        public static string cmd_autojoin_name = null;
-
-        public static bool dowindowposthing { get; private set; }
-#if !RELEASE
-        public static bool starterkit { get; private set; }
-#endif
-
-
-
-        static void CheckCommandlineArgsForThisMod() {
-#if TESTING
-            log.LogInfo("Checking args...");
-#endif
-
-            startworld = 0;
-
-            string[] args = System.Environment.GetCommandLineArgs();
-            for (int i = 0; i < args.Length; i++) {
-                if (args[i].TryTrimStart("--ksmulti-", out string t)) {
-                    args[i] = "--mp-" + t;
-                }
-            }
-
-            dump_game_ids = false;
-
-            Func<string, string, bool> gggg = (string arg, string thing) => {
-                return arg == "--" + thing
-                    || arg == "-" + thing
-                    || arg == thing;
-            };
-
-
-            for (int i = 0; i < args.Length; i++) {
-                string arg = args[i];
-
-
-                //--mp-test amputate_and_regrow
-
-
-                if (arg == ("--mp-disable") ||
-                    gggg(arg, "nomp") ||
-                    gggg(arg, "no-mp") ||
-                    gggg(arg, "nomultiplayer") ||
-                    gggg(arg, "no-multiplayer")
-                ) {
-                    FORCE_DISABLE_MP_MOD = true;
-                    string msg = $"CMD: Force-Disable multiplayer";
-                    log.LogInfo(msg);
-                    try {
-                        Util.CallLambdaWhen(() => { return Con.con != null; }, () => { Con.con.LogToConsole(msg); }, 1f);
-                    } catch (Exception eeeee) {
-
-                    }
-                    return;
-                }
-
-                if (arg == ("--mp-starthost")) {
-                    start_network = true;
-                    Plugin.cmd_start__is_client = false;
-                }
-                if (arg == ("--mp-startclient")) {
-                    start_network = true;
-                    Plugin.cmd_start__is_client = true;
-                }
-                if (arg == ("--mp-startserver")) {
-                    start_network = true;
-                    Plugin.cmd_start__is_client = false;
-                    Plugin.cmd_start__is_dedicated_server = true;
-
-                    Multiplayer.rules.AutoContinue = true;
-                }
-                if (arg == ("--mp-sethost")) {
-                    Plugin.cmd_start__is_client = false;
-                    Plugin.cmd_start__is_dedicated_server = false;
-                }
-                if (arg == ("--mp-setclient")) {
-                    Plugin.cmd_start__is_client = true;
-                }
-                if (arg == ("--mp-setserver")) {
-                    Plugin.cmd_start__is_client = false;
-                    Plugin.cmd_start__is_dedicated_server = true;
-
-                    Multiplayer.rules.AutoContinue = true;
-                }
-
-
-                if (arg == ("--dump-game-ids")) {
-                    dump_game_ids = true;
-                }
-
-                if (arg == ("--mp-startnetwork")) {
-                    start_network = true;
-                }
-                if (arg == ("--mp-immidiate-start")) {
-                    do_immidiate_start = true;
-                }
-                if (arg == ("--mp-setstarttutorial")) {
-                    startworld = 1;
-                }
-                if (arg == ("--mp-setstartdebug")) {
-                    startworld = 2;
-                }
-                if (arg == ("--mp-verbose")) {
-                    DebugMenuSettings.is_verbose = true;
-                    DebugMenuSettings._DEV_VISUALISE_NET_EVENTS = true;
-                }
-                if (arg == ("--mpdev-sort-windowpos")) {
-                    dowindowposthing = true;
-                }
-#if !RELEASE
-                if (arg == ("--kmultidev-starterkit")) {
-                    starterkit = true;
-                }
-#endif
-#if TESTING
-                if (arg == ("--kmultidev-setwindownamefromusername")) {
-                    win32windowtitlechanger.SetTitle(Application.productName + UIMainMenu.USERINPUT_NAME);
-                }
-#endif
-                if (arg == ("--mp-ip-port")) {
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-
-                    UIMainMenu.USERINPUT_IPPORT = arg;
-                }
-                if (arg == ("--mp-setname")) {
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-
-                    UIMainMenu.USERINPUT_NAME = Multiplayer.SanitizeTextInput(arg);
-                    plrname_override = true;
-                    log.LogInfo($"CMD: set name to: {UIMainMenu.USERINPUT_NAME}");
-                }
-                if (arg == ("--mp-setpass")) {
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-
-                    AnyCmdArgsPassed = true;
-                    Multiplayer.INPUT_PASSWORD = arg;
-                    log.LogInfo($"CMD: set password to: {Multiplayer.INPUT_PASSWORD}");
-                }
-                if (arg == ("--mp-setrule")) {
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-                    current_rule_to_set = arg;
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-
-                    rules_override = true;
-
-                    AnyCmdArgsPassed = true;
-
-#if !RELEASE
-                    if (current_rule_to_set == "FriendlyFire") {
-                        current_rule_to_set = "PVP";
-                    }
-#endif
-
-                    FieldInfo field2 = typeof(MultiplayerGameRules).GetField(current_rule_to_set);
-                    if (field2 == null) {
-                        log.LogError($"CMD: UNKNOWN RULE: {current_rule_to_set} (attempt to set it to: {arg})");
-                        continue;
-                    }
-                    object obj4;
-
-                    try {
-                        if (field2.FieldType == typeof(bool)) {
-                            obj4 = Con.ParseBool01(arg);
-                        } else {
-                            obj4 = System.ComponentModel.TypeDescriptor.GetConverter(field2.FieldType).ConvertFromInvariantString(arg);
-                        }
-                    } catch (Exception e) {
-                        log.LogError($"CMD: SET RULE, BUT VALUE IS INVALID:\nINPUT: {current_rule_to_set} = {arg}\n{e.Message}");
-                        continue;
-                    }
-
-                    TypedReference rulesref = __makeref(Multiplayer.rules);
-                    field2.SetValueDirect(rulesref, obj4);
-
-                    log.LogInfo($"CMD: set rule: {current_rule_to_set} = {field2.GetValue(Multiplayer.rules)}");
-
-                    continue;
-                }
-                if (arg == ("--mp-test")) {
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-
-                    test_scenario = arg;
-                }
-                if (arg == ("--mp-runcommand") || arg == "--ksm-con") {
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-                    AnyCmdArgsPassed = true;
-                    commands_to_run.Add(arg);
-                }
-                if (arg == ("--mp-servername")) {
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-                    AnyCmdArgsPassed = true;
-                    Net.MyServerInfo.name = arg;
-                }
-                if (arg == ("--mp-hoststeam")) {
-                    cmd_start__steam_lobby = true;
-                    start_network = true;
-
-                    log.LogInfo($"CMD: Will start steam lobby");
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-                    cmd_start__steam_lobby_type = arg;
-
-                    log.LogInfo($"CMD: Will start steam lobby of type:{arg}");
-
-
-                }
-                if (arg == ("--mp-autobrowser")) {
-                    cmd_autobrowser = true;
-                    AnyCmdArgsPassed = true;
-                    Application.runInBackground = true;
-                    if (i + 1 < args.Length && float.TryParse(args[i + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float delay)) {
-                        i++;
-                        cmd_autobrowser_delay = Mathf.Max(0f, delay);
-                    }
-                    log.LogInfo($"CMD: Will auto worldwide-refresh lobby browser after {cmd_autobrowser_delay}s");
-                }
-                if (arg == ("--mp-autojoin-name")) {
-                    i++; if (i == args.Length) {
-                        break;
-                    }
-
-                    arg = args[i];
-                    cmd_autojoin_name = arg;
-                    AnyCmdArgsPassed = true;
-                    Plugin.cmd_start__is_client = true;
-                    log.LogInfo($"CMD: Will autojoin lobby name containing: {cmd_autojoin_name}");
-                }
-
-
-
-
-                if (arg == "--mp-nosteam"
-                    || gggg(arg, "nosteam")
-                    || gggg(arg, "no-steam")
-                ) {
-                    FORCE_NO_STEAM = true;
-                }
-
-
-            }
-
-
-            AnyCmdArgsPassed = AnyCmdArgsPassed || FORCE_NO_STEAM || start_network || startworld != 0 || do_immidiate_start || plrname_override || cmd_autobrowser;
-            if (start_network) {
-                Application.runInBackground = true;
-                log.LogInfo($"CMD: Will start network.");
-            }
-            if (do_immidiate_start) {
-                if (startworld != 0) {
-                    log.LogInfo($"CMD: Will start immidiately in {startworld}.");
-                } else {
-                    log.LogInfo($"CMD: Will start immidiately.");
-                }
-            }
-        }
-
-
-        private IEnumerator DelayedDelayedTestGameStartImmidiate() {
-
-            while (WorldGeneration.world == null && PreRunScript.instance == null) {
-                yield return null;
-            }
-
-            ConsoleScript.CheckForConsole();
-#if !RELEASE
-            Con.RunCommand("musicvolume 0.011", true);
-#endif
-
-
-            log.LogInfo($"Found args... {start_network} {start_network} {Plugin.cmd_start__is_client} ");
-#if !RELEASE 
-            if (dowindowposthing) {
-                if (Plugin.cmd_start__is_client) {
-                    //screen.SetResolution()
-                    Screen.MoveMainWindowTo(Screen.mainWindowDisplayInfo, new Vector2Int(Screen.width, 0));
-
-                }
-
-            }
-            if (dowindowposthing) {
-                ScavPlayer.OnPlayerJoined += (plr) => {
-
-                    if (Net.IsServer && Net.Transport is TransportLiteNetLib lnl) {
-                        HashSet<ScavPlayer> plrs = new HashSet<ScavPlayer>();
-                        {
-                            List<NetPeer> peers = new List<NetPeer>();
-                            lnl.NetManager.GetConnectedPeers(peers);
-                            foreach (NetPeer peer in peers) {
-                                try {
-                                    if (peer.Tag != null && peer.Tag is TagPlayerInfo klpe && klpe.plr != null) {
-
-                                        if (IPAddress.IsLoopback(peer.Address)) {
-                                            //if (peer.Address.ToString() == Net.IP_LOCALHOST_IPv4) {
-                                            plrs.Add(klpe.plr);
-                                        }
-                                    }
-                                } catch (Exception e) {
-
-                                }
-                            }
-                        }
-                        plrs.Remove(ScavPlayer.LocalPlayer);
-                        Queue<ScavPlayer> queue = new Queue<ScavPlayer>(plrs);
-
-                        bool fixt = false;
-                        int localPlayersCount = 1 + plrs.Count();
-
-                        if (localPlayersCount == 0) {
-                            Screen.MoveMainWindowTo(Screen.mainWindowDisplayInfo, new Vector2Int(0, 0));
-                            Screen.SetResolution(1060, 600, false);
-                            return;
-                        }
-
-                        int gridX = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(localPlayersCount)));
-                        int gridY = Mathf.Max(1, Mathf.CeilToInt((float)localPlayersCount / gridX));
-
-                        int screenX = Mathf.Min(1060, Display.main.systemWidth / gridX);
-                        int screenY = Mathf.Min(600, Display.main.systemHeight / gridY);
-
-                        Screen.MoveMainWindowTo(Screen.mainWindowDisplayInfo, new Vector2Int(0, 0));
-                        Screen.SetResolution(screenX, screenY, false);
-
-                        for (int y = 0; y < gridY; y++) {
-                            for (int x = 0; x < gridX; x++) {
-                                if (!fixt) {
-                                    fixt = true;
-                                    continue;
-                                }
-                                ScavPlayer plr2 = queue.Dequeue();
-
-                                NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_SetWindowPos);
-                                writer.Put(new Vector2Int(x * screenX, y * screenY));
-                                writer.Put(new Vector2Int(screenX, screenY));
-                                Net.Server_SendTo(DeliveryMethod.ReliableOrdered, writer, plr2);
-                            }
-                        }
-                    }
-
-                };
-
-            }
-#endif
-
-            if (cmd_autobrowser || !string.IsNullOrEmpty(cmd_autojoin_name)) {
-                Application.runInBackground = true;
-                SkipWarningScreen();
-                SkipMainMenuIntro();
-                Together.log.warn($"[LobbyBrowser] AUTO-BROWSER waiting {cmd_autobrowser_delay}s then worldwide refresh");
-                yield return new WaitForSeconds(cmd_autobrowser_delay);
-                while (!KSteam.Loaded) {
-                    yield return null;
-                }
-                KSteam.userselected_lobbyDistanceFilter = ELobbyDistanceFilter.k_ELobbyDistanceFilterWorldwide;
-                UIServerBrowser.SortHideIncompatible = false;
-                UIServerBrowser.ReloadList();
-                Together.log.warn($"[LobbyBrowser] AUTO-BROWSER refresh fired myVer=\"{Multiplayer.FULL_VERSION_TAG}\"");
-                // give MatchList + LobbyDataUpdate a few seconds to land
-                yield return new WaitForSeconds(8f);
-                Together.log.warn($"[LobbyBrowser] AUTO-BROWSER done ui={UIServerBrowser.CurServerCount}/{UIServerBrowser.CurFilteredServerList.Count}");
-
-                if (!string.IsNullOrEmpty(cmd_autojoin_name) && !Net.IsRunning) {
-                    string needle = cmd_autojoin_name;
-                    NetPublicServerInfo match = null;
-                    foreach (NetPublicServerInfo lobby in UIServerBrowser.CurFilteredServerList) {
-                        if (lobby == null || string.IsNullOrEmpty(lobby.name)) {
-                            continue;
-                        }
-                        if (lobby.name.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0) {
-                            continue;
-                        }
-                        if (!lobby.IsJoinable()) {
-                            Together.log.warn($"[LobbyBrowser] AUTO-JOIN skip non-joinable name=\"{lobby.name}\"");
-                            continue;
-                        }
-                        match = lobby;
-                        break;
-                    }
-                    if (match == null) {
-                        // one more refresh pass
-                        UIServerBrowser.ReloadList();
-                        yield return new WaitForSeconds(8f);
-                        foreach (NetPublicServerInfo lobby in UIServerBrowser.CurFilteredServerList) {
-                            if (lobby != null && !string.IsNullOrEmpty(lobby.name)
-                                && lobby.name.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0
-                                && lobby.IsJoinable()) {
-                                match = lobby;
-                                break;
-                            }
-                        }
-                    }
-                    if (match != null && match.steam_lobby_info != null) {
-                        ulong id = match.steam_lobby_info.lobby_steamID.m_SteamID;
-                        Together.log.warn($"[LobbyBrowser] AUTO-JOIN name=\"{match.name}\" id={id}");
-                        TransportSteamworks.OnWantToJoinLobby(id);
-                        float joinWait = 0f;
-                        while (!Net.IsRunning && joinWait < 60f) {
-                            joinWait += 0.25f;
-                            yield return new WaitForSeconds(0.25f);
-                        }
-                        Together.log.warn($"[LobbyBrowser] AUTO-JOIN done running={Net.IsRunning} after {joinWait:F1}s");
-                    } else {
-                        Together.log.error($"[LobbyBrowser] AUTO-JOIN failed — no joinable lobby containing \"{needle}\"");
-                    }
-                }
-            }
-
-            if (start_network) {
-                Application.runInBackground = true;
-                if (Plugin.cmd_start__steam_lobby) {
-                    cmd_start__steam_lobby_type = cmd_start__steam_lobby_type.ToLower();
-                    TransportSteamworks.OnWantToHostLobby(
-                        Plugin.cmd_start__is_dedicated_server ? Net.NetType.DedicatedServer : Net.NetType.Host,
-                        cmd_start__steam_lobby_type == "private" ? ELobbyType.k_ELobbyTypePrivate : (
-                            cmd_start__steam_lobby_type == "friendsonly" ? ELobbyType.k_ELobbyTypeFriendsOnly :
-                            ELobbyType.k_ELobbyTypePublic
-                        )
-                    );
-                } else if (Plugin.cmd_start__is_client) {
-                    while (!Net.IsRunning && Util.IsInMainMenu()) {
-                        TransportLiteNetLib.OnWantToConnect(UIMainMenu.USERINPUT_IPPORT, Net.NetType.Client);
-                        yield return new WaitForSeconds(0.1f);
-                        while (Net.IsConnecting) {
-                            yield return null;
-                        }
-                        if (Multiplayer.IsNetworkActiveAndIsServer() || Util.IsInWorld()) {// it's been cancelled
-                            Together.log.l("Cancelled forced client connect.");
-                            break;
-                        }
-                    }
-                } else {
-                    if (Plugin.cmd_start__is_dedicated_server) {
-                        TransportLiteNetLib.OnWantToConnect(UIMainMenu.USERINPUT_IPPORT, Net.NetType.DedicatedServer);
-                    } else {
-                        TransportLiteNetLib.OnWantToConnect(UIMainMenu.USERINPUT_IPPORT, Net.NetType.Host);
-                    }
-                    yield return new WaitForSeconds(1.0f);
-                }
-            }
-
-            ConsoleScript.CheckForConsole();
-            foreach (string item in commands_to_run) {
-                try {
-                    Together.log.l($"CMD: Running command \"{item}\"");
-                    ConsoleScript.instance.RunCommandString(item);
-                } catch (Exception e) {
-                    Together.log.error($"CMD: Error while running command \"{item}\"\n{e}");
-                }
-            }
-
-
-
-            if (do_immidiate_start) {
-                SkipWarningScreen();
-
-                if (do_immidiate_start && !(start_network && Plugin.cmd_start__is_client)) {
-
-                    PreRunScript prs = PreRunScript.instance;
-                    if (startworld != 0) {
-                        if (startworld == 1) {
-                            prs.StartTutorial();
-                        } else
-                            if (startworld == 2) {
-                                WorldMP.LoadDebugWorld();
-                            } else {
-                                SceneManager.LoadScene("SampleScene");
-
-                                Util.CallLambdaWhen(() => { return WorldGeneration.world != null; }, () => {
-                                    WorldGeneration.world.biomeOverride = startworld == 1 ? WorldGeneration.OverrideSceneType.Tutorial : (startworld == 0 ? WorldGeneration.OverrideSceneType.None : WorldGeneration.OverrideSceneType.Debug);
-                                });
-
-                                if (Net.IsServer) {
-                                    ServerMain.Server_Announce_GAME_START();
-                                }
-                            }
-                    } else {
-                        prs.StartRun();
-                    }
-
-#if !RELEASE
-                    if (starterkit) {
-                        while (!Util.IsInWorld() || WorldGeneration.world.generatingWorld) { yield return new WaitForSeconds(0.1f); }
-                        yield return new WaitForSeconds(1.0f);
-                        yield return Con.ЗаспавниНахуйВсёШтобТеститьНахуй();
-                    }
-#endif
-                }
-
-            }
-
-
-#if TESTING
-            while (!Util.IsInWorld() || WorldGeneration.world.generatingWorld) { yield return new WaitForSeconds(0.1f); }
-            PlayerCamera.main.body.forceWalk = false; // fuck tutoril world 
-#endif
-
-
-            if (test_scenario != null) {
-                yield return DEV_RunTestScenario();
-            }
-
-
-        }
-        static IEnumerator DEV_RunTestScenario() {
-#if !RELEASE
-            switch (test_scenario) {
-                case "amputate_and_regrow": {
-                    if (!Plugin.cmd_start__is_client) {
-
-                        yield return new WaitForSecondsRealtime(0.1f);
-
-                        Con.RunCommand($"krok tp @a -3.25 67.75");
-
-                        yield return new WaitForSecondsRealtime(0.2f);
-                        Body body = ScavPlayer.GetBodyFromClientId(1);
-
-                        body.limbs[3].Dismember();
-                        yield return new WaitForSecondsRealtime(0.1f);
-                        body.limbs[6].Dismember();
-                        yield return new WaitForSecondsRealtime(0.1f);
-                        body.limbs[12].Dismember();
-                        yield return new WaitForSecondsRealtime(0.1f);
-                        body.limbs[9].Dismember();
-                        yield return new WaitForSecondsRealtime(0.1f);
-                        body.limbs[0].Dismember();
-                        yield return new WaitForSecondsRealtime(0.1f);
-                        body.limbs[2].Dismember();
-
-                        yield return new WaitForSecondsRealtime(0.1f);
-                        body.limbs[1].Dismember();
-
-                        yield return new WaitForSecondsRealtime(1.0f);
-                        body.ResetHealth();
-                        body.shock = 0;
-                        body.Stand(true);
-
-                    } else {
-                        Body body = Util.GetLocalBody();
-
-                        yield return new WaitForSecondsRealtime(1.9f);
-                        while (body.limbs[0].dismembered) { yield return new WaitForSeconds(0.1f); }
-                        body.ResetHealth();
-                        body.shock = 0;
-                        body.Stand(true);
-                        yield return new WaitForSecondsRealtime(0.1f);
-                        body.Jump();
-
-                    }
-
-                    break;
-                }
-
-
-                case "jungle_perf": {
-                    Con.RunCommand("volume 0.011", true);
-
-
-                    if (!Plugin.cmd_start__is_client) {
-                        //yield return new WaitForSecondsRealtime(1f);
-                        Multiplayer.rules.ScatterPunishDistance = 1500;
-                        Multiplayer.ApplyGameRules();
-
-                        //worldGeneration.world.baseLootRarity = 4;
-                        WorldGeneration.world.trapRarityMultiplier = 4;
-                        Con.RunCommand("skiplayer 4", true);
-
-                        yield return new WaitForSecondsRealtime(3f);
-
-                        while (!Util.IsInWorld() || WorldGeneration.world.generatingWorld) { yield return new WaitForSeconds(0.1f); }
-                        yield return new WaitForSeconds(2.0f);
-
-
-                        Con.RunCommand("give @a pistol shotgun mp3player shotgun legpouch bigpack paincream waterbottle foliage foliage foliage foliage bandage foliage tourniquet splint bandage experimentflesh rifle machete bikehelmet hoodie sneakers fentanyl shotgun riflemagazine dynamite", true);
-
-                        yield return new WaitForSeconds(2.0f);
-
-                        Con.RunCommand("godmode", true);
-
-                        while (!WorldGeneration.world.generatingWorld) {
-                            yield return new WaitForSeconds(5f);
-
-                            if (ScavPlayer.BodyToPlayerDict.All(x => x.Key.moveDir == Vector2.zero)) {
-                                Con.RunCommand($"tp {Mathf.Round(UnityEngine.Random.Range(-1f, 1f) * 500)},{Mathf.Round(UnityEngine.Random.Range(-1f, 1f) * 500)} @r");
-                            }
-                        }
-
-
-                    } else {
-
-
-                    }
-
-                    break;
-                }
-
-                case "sleep_test": {
-
-
-                    if (!Plugin.cmd_start__is_client) {
-                        //yield return new WaitForSecondsRealtime(1f);
-                        Multiplayer.rules.EnableSleep = true;
-                        Multiplayer.ApplyGameRules();
-
-
-                        yield return new WaitForSecondsRealtime(3f);
-
-                        while (!Util.IsWorldGenerated()) { yield return new WaitForSeconds(0.1f); }
-                        yield return new WaitForSeconds(2.0f);
-
-                        Con.RunCommand("setbodyfield energy 20 @a", true);
-                        foreach (ScavPlayer item in ScavPlayer.BodyToPlayerDict.Values) {
-                            MedicalSync.Server_QueueSendCharacterHealth(item.netBody);
-                        }
-
-                        yield return new WaitForSeconds(2.0f);
-
-
-                        if (Util.TryGetLocalBody(out Body lb)) {
-                            //lb.TakeANap();
-                            WoundView.view.TakeANap();
-                        }
-
-
-                    } else {
-
-                        while (!Util.IsWorldGenerated()) { yield return new WaitForSeconds(0.1f); }
-                        yield return new WaitForSeconds(7.0f);
-
-                        Con.RunCommand("setbodyfield energy 13", true);
-                        Multiplayer.rules.EnableSleep = true;
-
-                        WoundView.view.TakeANap();
-                    }
-
-                    break;
-                }
-
-
-                case "save_test": {
-                    Con.RunCommand("volume 0.011", true);
-
-
-                    if (!Plugin.cmd_start__is_client) {
-
-                        Con.RunCommand("give @a fentanyl");
-                        Con.RunCommand("give id:1 hoodie pistol");
-
-                        yield return new WaitForSecondsRealtime(3f);
-
-                        Con.RunCommand("saveandquit");
-
-                    } else {
-
-
-                    }
-
-                    break;
-                }
-                case "saveload_test": {
-                    Con.RunCommand("volume 0.011", true);
-
-
-                    if (!Plugin.cmd_start__is_client) {
-
-                        Con.RunCommand("give @a fentanyl");
-                        Con.RunCommand("give id:1 hoodie pistol");
-
-                        yield return new WaitForSecondsRealtime(3f);
-
-                        Con.RunCommand("saveandquit");
-
-                        yield return new WaitForSecondsRealtime(3f);
-
-
-                        PreRunScript prs = PreRunScript.instance;
-                        if (prs != null) {
-                            prs.LoadRun();
-                        }
-                        yield return new WaitForSecondsRealtime(3f);
-
-                    } else {
-
-
-                    }
-
-                    break;
-                }
-                case "cpr_test": {
-                    if (!Plugin.cmd_start__is_client) {
-
-                        yield return new WaitForSecondsRealtime(0.1f);
-
-                        Con.RunCommand($"give @a legpouch bigpack aed manualdefibrillator bandage shotgun morphine");
-
-                        yield return new WaitForSecondsRealtime(1f);
-
-                        while (!Application.isFocused) {
-                            yield return new WaitForSecondsRealtime(0.1f);
-                        }
-                        while (true) {
-                            yield return new WaitForSecondsRealtime(0.4f);
-
-                            Together.log.l("STOPPING HEART, press Mouse3 to continue");
-                            Body body = Con.GetBodyForCommand("@r", null).body;
-
-                            body.heartRate = 0;
-
-                            yield return new WaitForSecondsRealtime(1f);
-
-                            while (!Input.GetKey(KeyCode.Mouse3)) {
-                                yield return new WaitForSecondsRealtime(0.1f);
-                            }
-                            Together.log.l("DEFIBRILATION, press Mouse3 to continue");
-
-                            body.fibrillationProgress = 90;
-
-                            yield return new WaitForSecondsRealtime(1f);
-
-                            while (!Input.GetKey(KeyCode.Mouse3)) {
-                                yield return new WaitForSecondsRealtime(0.1f);
-                            }
-                        }
-
-                    } else {
-                        Body body = Util.GetLocalBody();
-
-
-                    }
-
-                    break;
-                }
-
-                case "decaytest": {
-                    Body body = Util.GetLocalBody();
-                    if (!Plugin.cmd_start__is_client) {
-
-                        yield return new WaitForSecondsRealtime(0.1f);
-
-                        GameObject lp = Con.SpawnThingOnPlayer("foliagebag", body, true);
-                        Con.SpawnThingOnPlayer("pizzaslice", body, true, lp);
-
-                        //con.RunCommand($"give @a foliagebag bandage foliagebag pizzaslice foliagebag foliagebag bandage bandage foliagebag bigpack bandage bandage bandage");
-
-                        yield return new WaitForSecondsRealtime(1f);
-
-
-                    } else {
-
-
-                    }
-
-                    break;
-                }
-                default: {
-                    break;
-                }
-            }
-
-#endif 
-            yield return null;
         }
 
         private void Update() {
@@ -1316,35 +466,10 @@ namespace Together {
                 ChunkSleep.LateFly();
             }
         }
-        [ClientReceiver((byte)NetmsgId.CLIENT_SetWindowPos)]
-        static void ClientReceiver__SetWindowPos(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-            if (Net.Transport != null && Net.Transport is TransportLiteNetLib lnl && IPAddress.IsLoopback(IPAddress.Parse(lnl.ip)) && Together.log.verbose) {
-            } else {
-                return;
-            }
-
-            reader.Get(out Vector2Int pos);
-            reader.Get(out Vector2Int size);
-
-            Screen.MoveMainWindowTo(Screen.mainWindowDisplayInfo, pos);
-            Screen.SetResolution(size.x, size.y, false);
-
-        }
-
     }
 
-
-
-
-
     public static class win32windowtitlechanger {
-
         public static bool changed_the_title = false;
-
-
-        //og: CasualtiesUnknown    (known from Application.productName )
-
-
         static IntPtr hwnd = IntPtr.Zero;
 
         public static void SetTitle(string newname) {
@@ -1367,30 +492,7 @@ namespace Together {
         [DllImport("user32.dll", EntryPoint = "SetWindowText", CharSet = CharSet.Unicode)]
         static extern bool SetWindowText(System.IntPtr hwnd, System.String lpString);
     }
-
-
-
-
-
-#if DEBUG
-    [HarmonyPatch(typeof(Settings), nameof(Settings.ApplyAll))]
-    static class Settings_ApplyAll_MultiplayerPatch {
-        static bool Prefix(Settings __instance) {
-            try {
-                Util.SetSetting("reswidth", Screen.width);
-                Util.SetSetting("resheight", Screen.height);
-                Util.SetSetting("fullscreen", Screen.fullScreen);
-            } catch (Exception e) {
-                log.error(e);
-            }
-            return true;
-        }
-    }
-#endif
-
 }
-
-
 
 namespace KrokoshaCasualtiesMP_DISABLED_STATE {
     internal class KrokoshaCasualtiesMP_DISABLED_BUTTON_HANDLER : MonoBehaviour {
@@ -1405,7 +507,7 @@ namespace KrokoshaCasualtiesMP_DISABLED_STATE {
             }
 #if !DONT_RESTART_IF_RESTART_BULLSHIT
             try {
-                KSteam.CheckSteam();
+                Together.KSteam.CheckSteam();
             } catch (Exception ex) {
                 doerror("Attempt to load steam" + ex.ToString());
             }
@@ -1413,11 +515,10 @@ namespace KrokoshaCasualtiesMP_DISABLED_STATE {
             Application.runInBackground = false;
         }
 
-        void DoTheNormalButton() { // if it cant create the button, the person is better off just playing singleplayer
+        void DoTheNormalButton() {
             if (MP_LINK_BUTTON == null) {
                 PreRunScript prerun = PreRunScript.instance;
-                if (prerun != null) {//is in main menu
-
+                if (prerun != null) {
                     try {
                         Transform credits = prerun.transform.Find("Credits");
                         Transform trans = prerun.transform.Find("Credits/TranslationRepo");
@@ -1426,7 +527,6 @@ namespace KrokoshaCasualtiesMP_DISABLED_STATE {
                             MP_LINK_BUTTON.name = "KROKMP_BUTTON_LINK";
 
                             RectTransform rt = MP_LINK_BUTTON.GetComponent<RectTransform>();
-                            //rt.anchoredPosition = new Vector2(50 + 90, rt.anchoredPosition.y);
                             rt.anchoredPosition = new Vector2(50, rt.anchoredPosition.y);
                             rt.SetSiblingIndex(credits.GetSiblingIndex());
 
@@ -1434,10 +534,10 @@ namespace KrokoshaCasualtiesMP_DISABLED_STATE {
 
                             string tool = ON_CLICK_WILL_ENABLE_THE_MOD ? "mainmenu_mp_button_tooltip_lastresort_enable_mod" : "mainmenu_mp_button_tooltip_lastresort_disable_mod";
 
-                            tt.localeName = Lang.LocalPrefixTag + tool;
+                            tt.localeName = Together.Lang.LocalPrefixTag + tool;
                             tt.skipLocale = true;
 
-                            tt.tipName = Lang.Get(tool);
+                            tt.tipName = Together.Lang.Get(tool);
 
                             Image img = MP_LINK_BUTTON.GetComponent<Image>();
                             img.sprite = mpmod_icon;
@@ -1447,35 +547,27 @@ namespace KrokoshaCasualtiesMP_DISABLED_STATE {
                             button.onClick.RemoveAllListeners();
                             button.onClick.SetPersistentListenerState(0, UnityEngine.Events.UnityEventCallState.Off);
                             button.onClick.AddListener(() => {
-
-                                PlayerPrefsExtended.SetBool(Plugin.FORCEDISABLE_PLAYERPREF_KEY, !ON_CLICK_WILL_ENABLE_THE_MOD);
+                                PlayerPrefsExtended.SetBool(Together.Plugin.FORCEDISABLE_PLAYERPREF_KEY, !ON_CLICK_WILL_ENABLE_THE_MOD);
 
                                 try {
                                     PlayerPrefs.Save();
-                                    log.l($"SET {Plugin.FORCEDISABLE_PLAYERPREF_KEY} => {ON_CLICK_WILL_ENABLE_THE_MOD}");
+                                    Together.log.l($"SET {Together.Plugin.FORCEDISABLE_PLAYERPREF_KEY} => {ON_CLICK_WILL_ENABLE_THE_MOD}");
                                 } catch (System.Exception e) {
+                                    doerror("PlayerPrefs.Save failed: " + e.Message);
                                 }
 
-                                if (ON_CLICK_WILL_ENABLE_THE_MOD) {
-
-                                } else {
-
-                                }
-                                Plugin.RestartGame();
-
+                                Together.Plugin.RestartGame();
                             });
                         }
-
                     } catch (System.Exception e) {
                         doerror("DoTheNormalButton failure " + e.ToString());
                     }
-
                 }
             }
         }
         void Update() {
             if (mpmod_icon == null) {
-                return; // its fucked then
+                return;
             }
 
             try {
@@ -1499,6 +591,4 @@ namespace KrokoshaCasualtiesMP_DISABLED_STATE {
             }
         }
     }
-
-
 }

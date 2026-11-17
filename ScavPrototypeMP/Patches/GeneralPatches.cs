@@ -1,53 +1,40 @@
+using System;
+using System.Linq;
+using System.Reflection;
 using CasualtiesTogetherUtils;
 using DiscordRPC;
 using DiscordRPC.Logging;
 using DiscordRPC.Message;
 using HarmonyLib;
-using LiteEntitySystem;
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using Unity.VisualScripting;
+using Together.Diagnostics;
+using Together.MpConstants;
 using UnityEngine;
-using UnityEngine.UI;
-using Random = UnityEngine.Random;
 
 namespace Together;
 
-
-
-
-
-
-
 [HarmonyPatch(typeof(PauseHandler), nameof(PauseHandler.Update))]
 static class PauseHandler_Update_MultiplayerPatch {
-    static void Prefix(PauseHandler __instance, ref float __state) {
+    static void Prefix(ref float __state) {
         __state = Time.timeScale;
     }
     static void Postfix(PauseHandler __instance, ref float __state) {
         if (Net.IsRunning) {
             Time.timeScale = __state;
-
             __instance.background.color *= 0.5f;
         }
     }
 }
 
-
-
-
-
 [HarmonyPatch(typeof(Locale), nameof(Locale.LoadLanguage))]
 static class Locale_LoadLanguage_MultiplayerPatch {
     static void Postfix() {
-        // make the local text for keybinds work
-        foreach (var keybind_label in Lang.EN.Where(x => x.Key.StartsWith("gameset_"))) {
-            var key = "gameset" + keybind_label.Key.TrimStart("gameset_");
+        foreach (var keybindLabel in Lang.EN) {
+            if (!keybindLabel.Key.StartsWith("gameset_", System.StringComparison.Ordinal)) {
+                continue;
+            }
+            string key = "gameset" + keybindLabel.Key.Substring("gameset_".Length);
             if (!Locale.currentLang.other.ContainsKey(key)) {
-                Locale.currentLang.other[key] = keybind_label.Value;
+                Locale.currentLang.other[key] = keybindLabel.Value;
             }
         }
     }
@@ -55,37 +42,31 @@ static class Locale_LoadLanguage_MultiplayerPatch {
 
 [HarmonyPatch(typeof(MusicManager), nameof(MusicManager.Start))]
 public static class MusicManager_Start_MultiplayerPatch {
-
     static float GetMusicVolumeSetting() {
         try {
             return Settings.Get<SettingFloat>("musicvolume").value;
-        } catch (Exception e) {
-#if TESTING
-            log.error(e);
-#endif
+        } catch (System.Exception ex) {
+            ModLog.Debug($"读取 musicvolume 设置回退默认值: {ex.Message}", LogDomain.UI);
         }
-        return 1;
+        return 1f;
     }
 
     public static float musicvolume {
-        get {
-            return GetMusicVolumeSetting();
-        }
+        get => GetMusicVolumeSetting();
         set {
             var set = Settings.Get<SettingFloat>("musicvolume");
             set.value = value;
             set.Apply();
         }
     }
+
     public static AudioSource source;
 
     public static float musicsources_volume {
-        get {
-            return musicvolume;
-        }
+        get => musicvolume;
         set {
             if (MusicManager.main != null) {
-                MusicManager.main.origVolume = (value);
+                MusicManager.main.origVolume = value;
             }
             if (PreRunScript.instance != null) {
                 PreRunScript.instance.menuSource.volume = value * 0.6666f;
@@ -98,23 +79,11 @@ public static class MusicManager_Start_MultiplayerPatch {
     }
 }
 
-
-
-
-
 [HarmonyPatch(typeof(RPCManager), nameof(RPCManager.GetCurrentRichPresence))]
 static class RPCManager_GetCurrentRichPresence_MultiplayerPatch {
-    struct dffdsfdsfdssfs {
-        public bool aaaaaaaaaaaaaaaa;
-        public bool bbbbbbbbbbbbbbbb;
-    }
+    static double _lastMenuUpdateAt = 0;
 
-    static void Prefix(RPCManager __instance, ref dffdsfdsfdssfs __state) {
-
-    }
-
-    static double someTimerIdkForWhat = 0;
-    static void Postfix(RPCManager __instance, ref dffdsfdsfdssfs __state, ref RichPresence __result) {
+    static void Postfix(ref RichPresence __result) {
 
 
         var issteam = Net.TryGetSteamTransport(out var tsteam);
@@ -167,7 +136,7 @@ static class RPCManager_GetCurrentRichPresence_MultiplayerPatch {
                 }
             }
             var t = Time.realtimeSinceStartupAsDouble;
-            var diff = t - someTimerIdkForWhat;
+            var diff = t - _lastMenuUpdateAt;
 
             if (Util.IsInMainMenu()) {
 
@@ -184,12 +153,12 @@ static class RPCManager_GetCurrentRichPresence_MultiplayerPatch {
                 __result.Details = $"{details}";
 
                 if (diff > 20) {
-                    someTimerIdkForWhat = t;
+                    _lastMenuUpdateAt = t;
                 }
             } else {
-                var fgdfdgssdf = __result.Details;
+                var prevDetails = __result.Details;
                 __result.Details = __result.State;
-                __result.State = fgdfdgssdf;
+                __result.State = prevDetails;
             }
 
             __result.Party = new Party() {
@@ -208,10 +177,6 @@ static class RPCManager_GetCurrentRichPresence_MultiplayerPatch {
 
 [HarmonyPatch(typeof(RPCManager), nameof(RPCManager.Initialize))]
 internal static class RPCManager_Initialize_MultiplayerPatch {
-    struct unusedStateData {
-        public bool aaaaaaaaaaaaaaaa;
-        public bool bbbbbbbbbbbbbbbb;
-    }
     internal static Timestamps rpcStartTime = Timestamps.Now;
 
     public static void QuickReset() {
@@ -221,7 +186,7 @@ internal static class RPCManager_Initialize_MultiplayerPatch {
                 RPCManager.instance.timer = 0;
             }
         } catch (Exception e) {
-            log.error(e);
+            ModLog.Exception(LogDomain.UI, "RPCManager.QuickReset", e);
         }
     }
 
@@ -232,7 +197,7 @@ internal static class RPCManager_Initialize_MultiplayerPatch {
         return $"{dsusr.DisplayName} - {dsusr.Username} - {dsusr.ID}";
     }
 
-    static bool Prefix(RPCManager __instance, ref unusedStateData __state) {
+    static bool Prefix(RPCManager __instance) {
         rpcStartTime = Timestamps.Now;
         __instance.client = new DiscordRpcClient("1506330530394804254");
 
@@ -300,10 +265,12 @@ internal static class RPCManager_Initialize_MultiplayerPatch {
 #else
             log.l($"DiscordRPC: OnJoin called ");
 #endif
-            if (!Multiplayer.IsNetworkActiveOrIsInGame()) {
+            if (!Multiplayer.IsNetworkActiveOrIsInGame() && !string.IsNullOrEmpty(e.Secret)) {
                 var splits = e.Secret.Split(':');
-                Multiplayer.CLIENT_JOIN_SECRET = splits[1];
-                TransportSteamworks.OnWantToJoinLobby(ulong.Parse(splits[0]));
+                if (splits.Length >= 2 && ulong.TryParse(splits[0], out ulong lobbyId)) {
+                    Multiplayer.CLIENT_JOIN_SECRET = splits[1];
+                    TransportSteamworks.OnWantToJoinLobby(lobbyId);
+                }
             }
             // else maybe show an alert?
         };
@@ -424,7 +391,7 @@ static class Sound_Play_MultiplayerPatch {
         // on every peer (thornbackyoung / other animals), so without this everyone hears it full-volume.
 #if FULLGAME
         // attaching a prosthetic plays a 2D sting at the origin, so every peer who runs AttachProsthetic hears it at full volume
-        if (clip == "prostheticapply") {
+        if (clip == VanillaAssetKeys.SoundProstheticApply) {
             Body attached = Limb_AchievementOwner_MultiplayerPatch.AttachingBody;
             if (attached != null && !Util.IsBodyLocal(attached)) {
                 pos = attached.transform.position;
@@ -433,7 +400,7 @@ static class Sound_Play_MultiplayerPatch {
         }
 #endif
 
-        if (clip == "animalhitsweet") {
+        if (clip == VanillaAssetKeys.SoundAnimalHitSweet) {
             var attacker = Body_Attack_MultiplayerPatch.LastAttacker;
             if (attacker == null || !Util.IsBodyLocal(attacker)) {
                 return false;
@@ -509,12 +476,15 @@ static class Sound_Play2_MultiplayerPatch {
         }
 
         var og_twoDimensional = twoDimensional;
+        Vector2 playPos = pos;
+        bool play2D = twoDimensional;
+        float playVolume = volume;
 
-        if (twoDimensional) {
+        if (play2D) {
             if (Body_StartClimbing_MultiplayerPatch.last_interacted_climbable != null && Body_StartClimbing_MultiplayerPatch.last_interacted_climbable.climbSounds != null && Body_StartClimbing_MultiplayerPatch.last_interacted_climbable.climbSounds.Contains(clip)) {
                 if (Body_StartClimbing_MultiplayerPatch.last_interacted_body != null && !Body_StartClimbing_MultiplayerPatch.last_interacted_body.IsBodyLocal()) {
-                    pos = Body_StartClimbing_MultiplayerPatch.last_interacted_body.transform.position;
-                    twoDimensional = false;
+                    playPos = Body_StartClimbing_MultiplayerPatch.last_interacted_body.transform.position;
+                    play2D = false;
                 } else {
                     return true;
                 }
@@ -526,12 +496,12 @@ static class Sound_Play2_MultiplayerPatch {
 
                 if (GunScript_Update_MultiplayerPatch.current_executing_gun.TryGetComponent(out TrackerGunScript gst) && gst.body.IsBodyLocal()) {
 
-                    twoDimensional = true; // since the body is local, hear this in its full form ig
+                    play2D = true; // since the body is local, hear this in its full form ig
                 } else {
                     if (clip.name.EndsWith("shot")) {
-                        pos = Vector2.LerpUnclamped(GunScript_Update_MultiplayerPatch.current_executing_gun.transform.position, Camera.main.transform.position, 0.3f);
+                        playPos = Vector2.LerpUnclamped(GunScript_Update_MultiplayerPatch.current_executing_gun.transform.position, Camera.main.transform.position, 0.3f);
                     }
-                    twoDimensional = false;
+                    play2D = false;
                 }
 
             } else {
@@ -541,8 +511,8 @@ static class Sound_Play2_MultiplayerPatch {
             if (Util.IsInWorld()) {
                 var pant = PlayerCamera.main.body.GetPantSound();
                 if (pant.barkSounds.Contains(clip)) {
-                    pos = Vector2.LerpUnclamped(pos, Camera.main.transform.position, 0.7f);
-                    twoDimensional = false;
+                    playPos = Vector2.LerpUnclamped(playPos, Camera.main.transform.position, 0.7f);
+                    play2D = false;
                 }
             }
 
@@ -552,18 +522,18 @@ static class Sound_Play2_MultiplayerPatch {
         var should_be_less_dist = true;
 
         if (should_be_less_dist) {
-            var dist = KM.DistanceSqr(pos, Camera.main.transform.position);
+            var dist = KM.DistanceSqr(playPos, Camera.main.transform.position);
             var volscale =
               1f;
 
-            if (!twoDimensional && og_twoDimensional) {
-                volume *= Sound_Play_MultiplayerPatch.nontwoDimensionalvolumemultiplier;
+            if (!play2D && og_twoDimensional) {
+                playVolume *= Sound_Play_MultiplayerPatch.nontwoDimensionalvolumemultiplier;
             }
 
             if (dist < default_max_range_sqr) {
-                pos = Vector2.LerpUnclamped(pos, Camera.main.transform.position, 0.3f);
+                playPos = Vector2.LerpUnclamped(playPos, Camera.main.transform.position, 0.3f);
 
-                var s = Play(clip, pos, twoDimensional, pitchShift, follow, volume * volscale, pitch, noReverb, ignoreMixer);
+                var s = Play(clip, playPos, play2D, pitchShift, follow, playVolume * volscale, pitch, noReverb, ignoreMixer);
 
                 __result = s;
             }
@@ -579,17 +549,18 @@ static class Sound_Play2_MultiplayerPatch {
 // stock LiquidAffect then NREs on null rb / world / FluidManager - and acid path on null talker.
 [HarmonyPatch(typeof(LiquidAffect), "FixedUpdate")]
 static class LiquidAffect_FixedUpdate_NullGuard_MultiplayerPatch {
+    private static readonly FieldInfo RbField = AccessTools.Field(typeof(LiquidAffect), "rb");
+    private static readonly FieldInfo LimbField = AccessTools.Field(typeof(LiquidAffect), "limb");
+
     static bool Prefix(LiquidAffect __instance) {
-        Traverse tr = Traverse.Create(__instance);
-        if (tr.Field("rb").GetValue<Rigidbody2D>() == null) {
+        if (RbField != null && RbField.GetValue(__instance) as Rigidbody2D == null) {
             return false;
         }
         if (WorldGeneration.world == null || FluidManager.main == null) {
             return false;
         }
-        Limb limb = tr.Field("limb").GetValue<Limb>();
+        Limb limb = LimbField != null ? LimbField.GetValue(__instance) as Limb : null;
         if (limb != null && (limb.body == null || limb.body.talker == null)) {
-            // acid branch calls talker.FinishedTalking(); skip until talker exists
             return false;
         }
         return true;

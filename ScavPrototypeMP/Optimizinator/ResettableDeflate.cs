@@ -84,6 +84,7 @@ internal static class ResettableDeflate
 		}
 		catch (Exception)
 		{
+			// 截断或损坏的 Gzip 数据包导致 Inflater 抛格式异常时安全返回 false，交由调用方回退标准流处理
 			return false;
 		}
 	}
@@ -105,6 +106,7 @@ internal static class ResettableDeflate
 		}
 		catch (Exception)
 		{
+			// 截断或损坏的裸 Deflate 载荷解压异常时安全返回 false，交由调用方回退标准流处理
 			return false;
 		}
 	}

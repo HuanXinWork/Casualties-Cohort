@@ -305,7 +305,8 @@ public static class PlayerCheckpoint {
             species = root.Value<string>("ggSpecies");
             slot = root.Value<int?>("ggSpeciesSlot") ?? 0;
             return !string.IsNullOrEmpty(species);
-        } catch {
+        } catch (Exception ex) {
+            Together.Diagnostics.ModLog.Debug("PlayerCheckpoint.ReadSpeciesFile fallback: " + ex.Message, Together.Diagnostics.LogDomain.World);
             return false;
         }
     }

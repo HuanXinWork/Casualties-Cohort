@@ -1,16 +1,12 @@
 using CasualtiesTogetherUtils;
-using LiteNetLib;
 using System;
 using System.Globalization;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Tasks;
 using UnityEngine;
 
 namespace Together;
 
-public struct SByteScalarVec2 : INetSerializeByMemcpy {
+public struct SByteScalarVec2 : INetSerializeByMemcpy, IEquatable<SByteScalarVec2> {
     public sbyte x;
     public sbyte y;
 
@@ -37,12 +33,12 @@ public struct SByteScalarVec2 : INetSerializeByMemcpy {
     public static bool operator !=(SByteScalarVec2 a, SByteScalarVec2 b) {
         return a.x != b.x || a.y != b.y;
     }
+    public bool Equals(SByteScalarVec2 other) => x == other.x && y == other.y;
     public override bool Equals(object other) {
-        if (!(other is SByteScalarVec2)) {
-            return false;
-        }
-        var v = (SByteScalarVec2)other;
-        return this.x == v.x && this.y == v.y;
+        return other is SByteScalarVec2 v && x == v.x && y == v.y;
+    }
+    public override int GetHashCode() {
+        return (((byte)x << 8) | (byte)y);
     }
 
     public override string ToString() {
@@ -51,7 +47,7 @@ public struct SByteScalarVec2 : INetSerializeByMemcpy {
 }
 
 
-public struct ShortScalarVec2 : INetSerializeByMemcpy {
+public struct ShortScalarVec2 : INetSerializeByMemcpy, IEquatable<ShortScalarVec2> {
     public short x;
     public short y;
 
@@ -78,12 +74,12 @@ public struct ShortScalarVec2 : INetSerializeByMemcpy {
     public static bool operator !=(ShortScalarVec2 a, ShortScalarVec2 b) {
         return a.x != b.x || a.y != b.y;
     }
+    public bool Equals(ShortScalarVec2 other) => x == other.x && y == other.y;
     public override bool Equals(object other) {
-        if (!(other is ShortScalarVec2)) {
-            return false;
-        }
-        var v = (ShortScalarVec2)other;
-        return this.x == v.x && this.y == v.y;
+        return other is ShortScalarVec2 v && x == v.x && y == v.y;
+    }
+    public override int GetHashCode() {
+        return (((ushort)x << 16) | (ushort)y);
     }
 
     public override string ToString() {
@@ -92,7 +88,7 @@ public struct ShortScalarVec2 : INetSerializeByMemcpy {
 }
 
 
-public struct Vector2_4byte_512 : INetSerializeByMemcpy {
+public struct Vector2_4byte_512 : INetSerializeByMemcpy, IEquatable<Vector2_4byte_512> {
 
     public short x;
     public short y;
@@ -110,7 +106,7 @@ public struct Vector2_4byte_512 : INetSerializeByMemcpy {
         this.x = x; this.y = y;
     }
     public Vector2_4byte_512(int x, int y) {
-        this.x = (short)(((float)x) * SCALE); 
+        this.x = (short)(((float)x) * SCALE);
         this.y = (short)(((float)y) * SCALE);
     }
     public Vector2_4byte_512(float x, float y) {
@@ -119,8 +115,8 @@ public struct Vector2_4byte_512 : INetSerializeByMemcpy {
     }
     public Vector2_4byte_512() { }
     public static Vector2_4byte_512 Unclamped(Vector2 vec) {
-        return new Vector2_4byte_512 (
-            (short)((vec.x) * SCALE), 
+        return new Vector2_4byte_512(
+            (short)((vec.x) * SCALE),
             (short)((vec.y) * SCALE)
         );
     }
@@ -168,6 +164,8 @@ public struct Vector2_4byte_512 : INetSerializeByMemcpy {
         return a.x != b.x || a.y != b.y;
     }
 
+    public bool Equals(Vector2_4byte_512 other) => x == other.x && y == other.y;
+
     public override bool Equals(object other) {
         if (!(other is Vector2_4byte_512)) {
             return false;
@@ -181,7 +179,7 @@ public struct Vector2_4byte_512 : INetSerializeByMemcpy {
 }
 
 
-public struct Vector2_4byte_200 : INetSerializeByMemcpy {
+public struct Vector2_4byte_200 : INetSerializeByMemcpy, IEquatable<Vector2_4byte_200> {
 
     public short x;
     public short y;
@@ -240,6 +238,8 @@ public struct Vector2_4byte_200 : INetSerializeByMemcpy {
         return a.x != b.x || a.y != b.y;
     }
 
+    public bool Equals(Vector2_4byte_200 other) => x == other.x && y == other.y;
+
     public override bool Equals(object other) {
         if (!(other is Vector2_4byte_200)) {
             return false;
@@ -251,336 +251,7 @@ public struct Vector2_4byte_200 : INetSerializeByMemcpy {
     }
 }
 
-// 3 bytes large
-public struct LimbNetId : INetSerializeByMemcpy {
-    public knetid bodyNetId;
-    public byte limbId;
-
-    public LimbNetId() {
-    }
-    public LimbNetId(Limb limb)  {
-        bodyNetId = limb.body.GetComponent<NetBody>().netId;
-        limbId = Util.GetLimbIndex(limb);
-    }
-
-
-    public Limb GetLimb() {
-        return NetBody.GetNetBodyFromId(bodyNetId).body.limbs[limbId];
-    }
-    public bool TryGetNetBodyAndLimb(out NetBody nb, out Limb limb) {
-        if (NetBody.TryGetNetBodyFromId(bodyNetId, out nb)) {
-            limb = nb.body.limbs[limbId];
-            return true;
-        }
-        nb = null;
-        limb = null;
-        return false;
-    }
-    public bool TryGetNetBodyAndLimbSafe(out NetBody nb, out Limb limb) {
-        if (NetBody.TryGetNetBodyFromId(bodyNetId, out nb) && limbId < nb.body.limbs.Count()) {
-            limb = nb.body.limbs[limbId];
-            return true;
-        }
-        nb = null;
-        limb = null;
-        return false;
-    }
-
-    public override string ToString() {
-        if (TryGetNetBodyAndLimbSafe(out var nb, out var l)) {
-            return $"NetLimb( limbId: {limbId}, name: {nb.body.limbs[limbId].fullName}, {nb})";
-        }
-        if (Util.TryGetLocalBody(out var locbody) && limbId < locbody.limbs.Count()) {
-            return $"NetLimb( NOT FOUND: bodyNetId: {bodyNetId}, id: {limbId}, name: {locbody.limbs[limbId].fullName})";
-        }
-        return $"NetLimb( NOT FOUND: bodyNetId: {bodyNetId}, id: {limbId})";
-    }
-}
-
-public struct AnyObjectNetId : INetSerializeByMemcpy {
-    public byte type; // 0 = unknown, 1 = netbody, 2 = plr, 3 = syncinfo, 4 = limb, 5 = block (hitPos carries world point)
-    public knetid netId;
-    public byte data1;
-
-    public bool IsNothing() {
-        return type == 0;
-    }
-
-    public bool IsBlockHit() {
-        return type == 5;
-    }
-
-    public static AnyObjectNetId ForBlockHit() {
-        return new AnyObjectNetId { type = 5 };
-    }
-
-    public override string ToString() {
-        string typename = "NONE";
-
-        if (type == 0) {
-        } else if (type == 1) {
-            typename = "NetBody";
-        } else if (type == 2) {
-            typename = "Player";
-        } else if (type == 3) {
-            typename = "SyncInfo";
-        } else if (type == 4) {
-            typename = "Limb";
-        } else if (type == 5) {
-            typename = "Block";
-        }
-        string objinfo = $"type:{type}, netId:{netId}, data1:{data1}";
-
-        if (TryGetLimb(out var foundlimb)) {
-            objinfo = $"{foundlimb.shortName}, {foundlimb.GetNetBody()}"; 
-        } else if (TryGetNetBody(out var nb)) {
-            objinfo = nb.ToString();
-        } else if (TryGetPlayer(out var foundplr)) {
-            objinfo = foundplr.ToString();
-        } else if (TryGetSyncInfo(out var si)) {
-            objinfo = si.ToString();
-        } else {
-            objinfo = "NOT FOUND: " + objinfo;
-        }
-
-        if (type == 0 && netId == 0 && data1 == 0) {
-            return $"AnyObjectNetId( NULL )";
-        }
-
-        return $"AnyObjectNetId( {typename} / {objinfo} )";
-    }
-
-
-    public static bool TryGetNetIdFromGameObject(GameObject obj, out AnyObjectNetId ni) {
-        ni = GetNetIdFromGameObject(obj);
-        if (ni.type != 0) {
-            return true;
-        }
-        return false;
-    }
-
-    public static AnyObjectNetId GetNetId(Item item) {
-        if (item != null && item.TryGetTracker(out var tracker)) {
-            return new AnyObjectNetId(tracker);
-        }
-        return new AnyObjectNetId();
-    }
-    public static AnyObjectNetId GetNetId(BuildingEntity building) {
-        if (building != null && building.TryGetTracker(out var tracker)) {
-            return new AnyObjectNetId(tracker);
-        }
-        return new AnyObjectNetId();
-    }
-    public static AnyObjectNetId GetNetIdFromGameObject(GameObject obj) {
-        if (obj.TryGetComponent(out Limb li) && li.TryGetNetBody(out NetBody nb)) {
-            return new(li);
-        }
-        if (obj.TryGetComponent(out nb)) {
-            return new(nb);
-        }
-        if (obj.TryGetComponent(out SyncInfoGameObjectTracker tracker)) {
-            return new(tracker);
-        }
-        if (obj.TryGetComponent(out ScavPlayer plr)) {
-            return new(plr);
-        }
-        return new();
-    }
-    public AnyObjectNetId() {
-        type = 0;
-        netId = 0;
-    }
-    public AnyObjectNetId(NetBody nb) {
-        type = 1;
-        netId = nb.netId;
-    }
-    public AnyObjectNetId(ScavPlayer nb) {
-        type = 2;
-        netId = nb.playerId;
-    }
-    public AnyObjectNetId(SyncInfo si) {
-        type = 3;
-        netId = si.syncId;
-    }
-    public AnyObjectNetId(SyncInfoGameObjectTracker tracker) {
-        type = 3;
-        netId = tracker.syncId;
-    }
-    public AnyObjectNetId(Limb li) {
-        type = 4;
-        if (li.TryGetNetBody(out var nb)) {
-            netId = nb.netId;
-        }
-        data1 = li.GetIndex();
-    }
-
-    
-    public bool TryGetLimb(out Limb limb) {
-        if (type == 4) {
-            if (NetBody.TryGetNetBodyFromId(netId, out var nb) && data1 < nb.body.limbs.Count()) {
-                limb = nb.body.limbs[data1];
-                return true;
-            }
-        }
-        limb = null;
-        return false;
-    }
-
-    public bool TryGetNetBodyAndLimb(out NetBody nb, out Limb limb) {
-        if (type == 4) {
-            if (NetBody.TryGetNetBodyFromId(netId, out nb) && data1 < nb.body.limbs.Count()) {
-                limb = nb.body.limbs[data1];
-                return true;
-            }
-        }
-        nb = null;
-        limb = null;
-        return false;
-    }
-
-    public bool TryGetNetBody(out NetBody nb) {
-        if (type == 1) {
-            if (NetBody.TryGetNetBodyFromId(netId, out nb)) {
-                return true;
-            }
-        }
-        if (type == 2) {
-            if (ScavPlayer.TryGetPlayerAndNetBodyFromClientId(netId, out var plr, out nb)) {
-                return true;
-            }
-        }
-        if (type == 4) {
-            if (NetBody.TryGetNetBodyFromId(netId, out nb)) {
-                return true;
-            }
-        }
-        nb = null;
-        return false;
-    }
-    public bool TryGetPlayer(out ScavPlayer plr) {
-        if (type == 2) {
-            if (ScavPlayer.TryGetPlayerFromClientId(netId, out plr)) {
-                return true;
-            }
-        }
-        if (type == 1) {
-            if (NetBody.TryGetNetBodyFromId(netId, out var nb) && nb.IsPlayer) {
-                plr = nb.plr;
-                return true;
-            }
-        }
-        if (type == 4) {
-            if (NetBody.TryGetNetBodyFromId(netId, out var nb) && nb.IsPlayer) {
-                plr = nb.plr;
-                return true;
-            }
-        }
-        plr = null;
-        return false;
-    }
-    public bool TryGetSyncInfo(out SyncInfo si) {
-        if (type == 3) {
-            if (NetObjectRegistry.TryGetSyncInfo(netId, out  si)) {
-                return true;
-            }
-        }
-        si = null; 
-        return false;
-    }
-    public bool TryGetItem(out Item item, out SyncInfo si) {
-        if (type == 3) {
-            if (NetObjectRegistry.TryGetSyncInfo(netId, out si) && si.go.TryGetComponent(out item)) {
-                return true;
-            }
-        }
-        item = null;
-        si = null;
-        return false;
-    }
-    public bool TryGetBuilding(out BuildingEntity building, out SyncInfo si) {
-        if (type == 3) {
-            if (NetObjectRegistry.TryGetSyncInfo(netId, out si) && si.go.TryGetComponent(out building)) {
-                return true;
-            }
-        }
-        building = null;
-        si = null;
-        return false;
-    }
-    // it will not get player instance btw!!
-    public bool TryGetGameObject(out GameObject go) {
-        if (type != 0) {
-            if (TryGetLimb(out var li)) {
-                go = li.gameObject;
-                return true;
-            }
-            if (TryGetNetBody(out var nb)) {
-                go = nb.gameObject;
-                return true;
-            }
-            if (TryGetSyncInfo(out var si)) {
-                go = si.go;
-                return true;
-            }
-        }
-        go = null;
-        return false;
-    }
-    //nah
-    //public bool TryGetComponent(out MonoBehaviour component) {
-    //    if (type != 0) {
-    //        if (TryGetLimb(out var li)) {
-    //            component = li;
-    //            return true;
-    //        }
-    //        if (TryGetNetBody(out var nb)) {
-    //            go = nb.gameObject;
-    //            return true;
-    //        }
-    //        if (TryGetSyncInfo(out var si)) {
-    //            go = si.go;
-    //            return true;
-    //        }
-    //    }
-    //    go = null;
-    //    return false;
-    //}
-    public bool TryGetTalker(out Talker talker) {
-        if (TryGetGameObject(out var go)) {
-            return Util.TryGetTalkerOnObject(go, out talker);
-        }
-        talker = null;
-        return false;
-    }
-
-    
-    public static bool operator ==(AnyObjectNetId lhs, AnyObjectNetId rhs) {
-        return 
-            lhs.netId == rhs.netId && 
-            lhs.type == rhs.type && 
-            lhs.data1 == rhs.data1;
-        ;
-    }
-    public static bool operator !=(AnyObjectNetId lhs, AnyObjectNetId rhs) {
-        return !(lhs == rhs);
-    }
-    public override bool Equals(object other) {
-        if (other is Component ccccc ) {
-            if (this.TryGetGameObject(out var go)) {
-                return go == ccccc.gameObject;
-            }
-            return false;
-        }
-        if (!(other is AnyObjectNetId)) {
-            return false;
-        }
-        return this == (AnyObjectNetId)other;
-    }
-
-    
-}
-
-public struct Color24 : INetSerializeByMemcpy {
+public struct Color24 : INetSerializeByMemcpy, IEquatable<Color24> {
     public byte r;
     public byte g;
     public byte b;
@@ -648,15 +319,15 @@ public struct Color24 : INetSerializeByMemcpy {
 
 
     public static bool operator ==(Color24 lhs, Color24 rhs) {
-        return 
-            lhs.r == rhs.r && 
-            lhs.g == rhs.g && 
+        return
+            lhs.r == rhs.r &&
+            lhs.g == rhs.g &&
             lhs.b == rhs.b;
-            ;
     }
     public static bool operator !=(Color24 lhs, Color24 rhs) {
         return !(lhs == rhs);
     }
+    public bool Equals(Color24 other) => r == other.r && g == other.g && b == other.b;
     public override bool Equals(object other) {
         if (!(other is Color24)) {
             return false;
@@ -677,7 +348,7 @@ public struct Color24 : INetSerializeByMemcpy {
     }
     public string ToHex(bool with_hashtag = true) {
         string str = string.Format(CultureInfo.InvariantCulture.NumberFormat, "{0:X2}{1:X2}{2:X2}", r, g, b);
-        
+
         if (with_hashtag) {
             str = "#" + str;
         }
@@ -723,13 +394,13 @@ public struct Color24 : INetSerializeByMemcpy {
     public static Color24 black {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get {
-            return new Color24(0,0,0);
+            return new Color24(0, 0, 0);
         }
     }
 
 }
 
-public struct Vector2Int16 : INetSerializeByMemcpy {
+public struct Vector2Int16 : INetSerializeByMemcpy, IEquatable<Vector2Int16> {
     public short x;
     public short y;
 
@@ -768,6 +439,8 @@ public struct Vector2Int16 : INetSerializeByMemcpy {
         return a.x != b.x || a.y != b.y;
     }
 
+    public bool Equals(Vector2Int16 other) => x == other.x && y == other.y;
+
     public override bool Equals(object other) {
         if (!(other is Vector2Int16)) {
             return false;
@@ -783,7 +456,7 @@ public struct Vector2Int16 : INetSerializeByMemcpy {
     }
 }
 
-public struct Vector2UInt8 : INetSerializeByMemcpy {
+public struct Vector2UInt8 : INetSerializeByMemcpy, IEquatable<Vector2UInt8> {
     public byte x;
     public byte y;
 
@@ -815,6 +488,7 @@ public struct Vector2UInt8 : INetSerializeByMemcpy {
         return a.x != b.x || a.y != b.y;
     }
 
+    public bool Equals(Vector2UInt8 other) => x == other.x && y == other.y;
 
     public override bool Equals(object other) {
         if (!(other is Vector2UInt8)) {
@@ -830,17 +504,3 @@ public struct Vector2UInt8 : INetSerializeByMemcpy {
         return ((Vector2)this).ToString();
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

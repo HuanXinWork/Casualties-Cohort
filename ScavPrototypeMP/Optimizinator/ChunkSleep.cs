@@ -470,12 +470,16 @@ public static class ChunkSleep {
     static void Note(string line) {
         if (!Together.log.verbose) return;
         string text = DateTime.UtcNow.ToString("HH:mm:ss") + " " + line;
-        try { Plugin.log.LogInfo("[sleep] " + line); } catch { }
+        Together.Diagnostics.ModLog.Debug("[sleep] " + line, Together.Diagnostics.LogDomain.World);
         try {
             string dir = Path.GetDirectoryName(typeof(ChunkSleep).Assembly.Location);
-            string path = Path.Combine(dir, "sleep-test-" + System.Diagnostics.Process.GetCurrentProcess().Id + ".txt");
-            File.AppendAllText(path, text + Environment.NewLine);
-        } catch { }
+            if (!string.IsNullOrEmpty(dir)) {
+                string path = Path.Combine(dir, "sleep-test-" + System.Diagnostics.Process.GetCurrentProcess().Id + ".txt");
+                File.AppendAllText(path, text + Environment.NewLine);
+            }
+        } catch (Exception ex) {
+            Together.Diagnostics.ModLog.Debug("[sleep] write failed: " + ex.Message, Together.Diagnostics.LogDomain.World);
+        }
     }
 }
 

@@ -42,6 +42,8 @@ namespace Together.Diagnostics {
             WriteToConsole(formatted, null);
         }
 
+        public static void Info(LogDomain domain, string message) => Info(message, domain);
+
         public static void Warning(string message, LogDomain domain = LogDomain.Core) {
             string formatted = FormatDomainPrefix(domain) + message;
             _sink?.LogWarning(formatted);
@@ -49,12 +51,20 @@ namespace Together.Diagnostics {
             MpFlightRecorder.Record(domain, FlightEventKind.Warning);
         }
 
+        public static void Warning(LogDomain domain, string message) => Warning(message, domain);
+
+        public static void Warn(string message, LogDomain domain = LogDomain.Core) => Warning(message, domain);
+
+        public static void Warn(LogDomain domain, string message) => Warning(message, domain);
+
         public static void Error(string message, LogDomain domain = LogDomain.Core) {
             string formatted = FormatDomainPrefix(domain) + message;
             _sink?.LogError(formatted);
             WriteToConsole(formatted, "red");
             MpFlightRecorder.Record(domain, FlightEventKind.Error);
         }
+
+        public static void Error(LogDomain domain, string message) => Error(message, domain);
 
         public static void Exception(LogDomain domain, string context, Exception ex) {
             string msg = ex == null
@@ -77,6 +87,10 @@ namespace Together.Diagnostics {
             WriteToConsole(text, "grey");
 #endif
         }
+
+        /// <summary>Debug 构建专属分域诊断日志重载；Release 编译期自动抹除。</summary>
+        [Conditional("DEBUG")]
+        public static void Debug(LogDomain domain, string message) => Debug(message, domain);
 
         /// <summary>Debug 构建专属分步流程追踪日志；Release 编译期自动抹除。</summary>
         [Conditional("DEBUG")]

@@ -3,11 +3,7 @@ namespace KrokV5Optimization;
 internal static class Report
 {
 	internal static string Line() =>
-		FixUtilCompress.Evidence()
-		+ " " + FixCompressWriter.Evidence()
-		+ " " + FixUtilCompressDeflate.Evidence()
-		+ " " + FixUtilDecompress.Evidence()
-		+ " " + FixUtilDecompressDeflate.Evidence()
+		CompressPool.Evidence()
 		+ " " + FixChunkBlock.Evidence()
 		+ " " + FixChunkFluid.Evidence()
 		+ " " + FixSkinSkip.Evidence()

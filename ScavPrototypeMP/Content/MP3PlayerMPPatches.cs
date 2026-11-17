@@ -156,8 +156,8 @@ public static class MP3Menu_Exit_MultiplayerPatch {
 
 
 public abstract class MP3PlayerAudioStreamPlayerBase : StreamedAudioOutput {
-    new void Awake() {
-        max_hear_distance = 82;
+    protected override void Awake() {
+        max_hear_distance = 82f;
         is_voice = false;
         base.Awake();
     }
@@ -179,7 +179,7 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
 
     public Item item => GetComponent<Item>();
     AudioSource musicplayersource;
-
+    readonly object _pcmLock = new object();
 
     public List<float> pcm_buffer_from_the_filter_thing = new List<float>(4096);    // should be always mono, its in sample rate AudioSettings.outputSampleRate
 
@@ -204,9 +204,10 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         musicplayersource.clip = audio;
 
         queued_resampled_samples.Clear();
-        pcm_buffer_from_the_filter_thing.Clear();
+        lock (_pcmLock) {
+            pcm_buffer_from_the_filter_thing.Clear();
+        }
 
-        //last_timeSamples = 0;
         musicplayersource.Play();
     }
 
@@ -221,7 +222,9 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         if (musicplayersource.isPlaying) {
             if ( SharedMain.LocalWorldIsGenerating ) {
                 queued_resampled_samples.Clear();
-                pcm_buffer_from_the_filter_thing.Clear();
+                lock (_pcmLock) {
+                    pcm_buffer_from_the_filter_thing.Clear();
+                }
                 return;
             }
 
@@ -230,27 +233,22 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
                 return;
             }
 
-
-            // check if it ran out of battery 
             if (item.condition <= 0) {
                 musicplayersource.Stop();
                 return;
-            } else {
-                // maybe make it use power to play music? but like very little tho
             }
 
-
-
-
-            if (pcm_buffer_from_the_filter_thing.Count >= Voicechat.system_framesize) {
-
-                var resampleddata = Voicechat.ResampleVoiceBlob(pcm_buffer_from_the_filter_thing, AudioSettings.outputSampleRate, target_samplerate);
-                pcm_buffer_from_the_filter_thing.Clear();
-
-                foreach (var item in resampleddata) {
-                    queued_resampled_samples.Enqueue(item);
+            float[] resampleddata = null;
+            lock (_pcmLock) {
+                if (pcm_buffer_from_the_filter_thing.Count >= Voicechat.system_framesize) {
+                    resampleddata = Voicechat.ResampleVoiceBlob(pcm_buffer_from_the_filter_thing, AudioSettings.outputSampleRate, target_samplerate);
+                    pcm_buffer_from_the_filter_thing.Clear();
                 }
-
+            }
+            if (resampleddata != null) {
+                foreach (var sample in resampleddata) {
+                    queued_resampled_samples.Enqueue(sample);
+                }
             }
 
 
@@ -321,7 +319,7 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         encoder?.Dispose();
     }
 
-    new void Awake() {
+    protected override void Awake() {
         if (Net.IsClient) {
             Destroy(this);
 #if DEBUG || RELEASETEST
@@ -344,7 +342,6 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         musicplayersource.bypassReverbZones = true;
         musicplayersource.dopplerLevel = 0;
         musicplayersource.spatialBlend = 0;
-        //musicplayersource.transform.position = new Vector3(99999999,999999,9999999);
 
         base.Awake();
 
@@ -355,15 +352,7 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         public MP3PlayerServerAudioStreamer owner;
         void OnAudioFilterRead(float[] data, int channels) {
             try {
-                if (!owner.musicplayersource.isPlaying) {
-                    return;
-                }
-
-                if (owner.pcm_buffer_from_the_filter_thing.Count > Voicechat.system_framesize * 25) {
-#if TESTING
-                    if (log.verbose)
-                        log.l("pcm_buffer_from_the_filter_thing is overflowing!!!!!!!!!!!!!");
-#endif
+                if (owner == null || owner.musicplayersource == null || !owner.musicplayersource.isPlaying) {
                     return;
                 }
 
@@ -375,28 +364,27 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
                 int chan_count = 0;
                 float cur_sample = 0;
 
-                for (int i = 0; i < data.Length; i++) {
-
-                    cur_sample += data[i];
-                    chan_count++;
-                    if (chan_count >= channels) {
-                        owner.pcm_buffer_from_the_filter_thing.Add((cur_sample * inv_chan) * inv_volgetter);
-                        chan_count = 0;
-                        cur_sample = 0;
+                lock (owner._pcmLock) {
+                    if (owner.pcm_buffer_from_the_filter_thing.Count > Voicechat.system_framesize * 25) {
+                        Array.Clear(data, 0, data.Length);
+                        return;
                     }
-
-                    // and set it to 0 so that this audiosource doesnt do any sound
-                    data[i] = 0;
+                    for (int i = 0; i < data.Length; i++) {
+                        cur_sample += data[i];
+                        chan_count++;
+                        if (chan_count >= channels) {
+                            owner.pcm_buffer_from_the_filter_thing.Add((cur_sample * inv_chan) * inv_volgetter);
+                            chan_count = 0;
+                            cur_sample = 0;
+                        }
+                        data[i] = 0;
+                    }
                 }
             }
             catch (Exception e) {
-#if TESTING
-                if (log.verbose)
-                    Plugin.log.LogError("MP3 PLAYER OnAudioFilterRead:\n"+e.ToString());
-#endif
+                // Unity 音频混音线程不可调用主线程 API，仅在调试期输出到底层线程安全日志源
+                Together.Diagnostics.ModLog.Debug("MP3 PLAYER OnAudioFilterRead: " + e.Message, Together.Diagnostics.LogDomain.Item);
             }
-
-
         }
     }
 
@@ -451,7 +439,7 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
 
     [ServerReceiver((byte)NetmsgId.SERVER_MP3RequestMusicList)]
     static void Server_MP3RequestMusicList(knetid cid, LiteNetLib.Utils.NetDataReader reader) {
-        reader.Get(out int val);
+        reader.Get(out int _);
 
         if (ScavPlayer.TryGetPlayerFromClientId(cid, out var plr) ) {
             if (MP3Menu.dropdownList == null) {
@@ -468,8 +456,8 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
 
         if (ScavPlayer.TryGetPlayerFromClientId(cid, out var plr) && plr.IsConscious()) {
             if (NetObjectRegistry.TryGetSyncInfo(mp3plr_syncid, out var si) && si.IsItem() && si.item.id == "mp3player" && ItemSync.CheckIfBodyReachThisItem(si,plr.body)) {
-                if (val >= MP3Menu.clips.Count) {
-                    return;// sus
+                if (val < 0 || MP3Menu.clips == null || val >= MP3Menu.clips.Count) {
+                    return;
                 }
                 var clip = MP3Menu.clips[val];  
 
@@ -516,10 +504,13 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         //var data = packet.GetSBytes(); // old decoder
         //var frame = data.Select(x => (float)((float)x / (float)sbyte.MaxValue)).ToArray();
 
-        if (NetObjectRegistry.TryGetSyncInfo(source_syncid, out var si)) {
+        if (NetObjectRegistry.TryGetSyncInfo(source_syncid, out var si) && si.go != null) {
             var go = si.go;
 
             reader.Get(out byte freq_index);
+            if (freq_index >= AudioOpusEncoding.STANDART_FREQUENCIES.Length) {
+                return;
+            }
             var freq = AudioOpusEncoding.STANDART_FREQUENCIES[freq_index];
 
             reader.Get(out byte[] data);

@@ -1,25 +1,15 @@
 using CasualtiesTogetherUtils;
-using HarmonyLib;
 using LiteEntitySystem;
-using LiteNetLib;
 using LiteNetLib.Utils;
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using TMPro;
+using Together.Api;
+using Together.MpConstants;
 using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.Events;
 
-
 namespace Together {
-
-
-
-
-
-
 
     public class Server_PlayerState {
 
@@ -76,7 +66,6 @@ namespace Together {
             OnSceneChangeOrWorldStartGenerate();
         }
         public void ResetKnownChunks() {
-
             known_chunks = new bool[WorldChunkSync.SYNCCHUNK_TILESIZE, WorldChunkSync.SYNCCHUNK_TILESIZE];
 
             // host knows about everything
@@ -120,16 +109,10 @@ namespace Together {
             cooldowns[id] = Time.realtimeSinceStartupAsDouble;
             return true;
         }
-
-
     }
 
 
-
-
-
-
-    public class ScavPlayer : MonoBehaviour {
+    public partial class ScavPlayer : MonoBehaviour {
 
         public readonly Dictionary<string, object> CUSTOM_LOCAL_DATA = new();
         public BasePlayer BasePlayer { get; internal set; }
@@ -147,7 +130,6 @@ namespace Together {
         public Sprite IconMediumSprite;
         public Sprite IconSmallSprite;
 
-
         public List<Sprite> KnownUserTagIcons = new();
 
         public knetid playerId { get; internal set; }
@@ -157,17 +139,12 @@ namespace Together {
         // fullgame prerun pick. stamped during CharacterSelectWait, consumed on spawn (phase 3).
         public byte selectedCharacter;
 
-
         public Vector2 CursorWorldPos { get { return BasePlayer.LookPos.Value; } set { BasePlayer.LookPos.Value = value; } }
         public Vector2 CursorScreenPos => BasePlayer.CursorPos.InterpolatedValue;
         public Vector2 CameraViewPos => BasePlayer.CameraPos.Value;
 
-
-        #region PLAYER_COMPONENTS
-
         internal VoicechatOutput vc_output { get; private set; }
 
-        #endregion
         #region STATIC_SHIT
 
         public static event Action<ScavPlayer> OnPlayerJoined;
@@ -179,13 +156,15 @@ namespace Together {
         public static Dictionary<knetid, ScavPlayer> ClientIdToPlayerDict = new Dictionary<knetid, ScavPlayer>();
         public static IEnumerable<ScavPlayer> AllPlayers => ClientIdToPlayerDict.Values;
 
-
         public static List<ScavPlayer> AllLivingPlayers = new();
         public static List<ScavPlayer> AllDeadPlayers = new();
+
+        public static ScavPlayer LocalPlayer;
 
         #endregion
 
         #region NetPlayer_SafeBodyGetters
+
         public bool IsAlive() {
             if (body == null) {
                 return false;
@@ -249,110 +228,19 @@ namespace Together {
             }
             return false;
         }
-        #endregion
-
-        #region GLOBAL_UTILS
-
-
-
-        public static List<NetBody> GetPlayerBodiesInRadius(Vector2 pos, float radius) {
-            radius *= radius; // square it
-
-            List<NetBody> b = new List<NetBody>();
-            foreach (Body body in ScavPlayer.BodyToPlayerDict.Keys) {
-                if (KM.DistanceCheck_PreSqr(body.transform.position, pos, radius) && body.TryGetNetBody(out NetBody c)) {
-                    b.Add(c);
-                }
-            }
-            return b;
-        }
-
-
-        public static List<ScavPlayer> GetPlayersInRadius(Vector2 pos, float radius, bool exceptHost = false) {
-            radius *= radius; // square it
-
-            List<ScavPlayer> b = new List<ScavPlayer>();
-            foreach (ScavPlayer plr in ScavPlayer.AllPlayers) {
-                if (KM.DistanceCheck_PreSqr(plr.pos, pos, radius)) {
-                    b.Add(plr);
-                }
-            }
-            if (exceptHost) {
-                b.Remove(LocalPlayer);
-            }
-            return b;
-        }
-
-        public static (NetBody, float) GetNearestConsciousPlayerToThisBody(NetBody thisone) {
-            float nearest = float.PositiveInfinity;
-            NetBody nearestsci = null;
-            foreach (KeyValuePair<Body, ScavPlayer> item in ScavPlayer.BodyToPlayerDict) {
-                NetBody pb = item.Key.GetComponent<NetBody>();
-                if ((pb.body.conscious || pb.body.sleeping) && thisone != (pb as NetBody)) {
-                    float dist = KM.DistanceSqr(pb.transform.position, thisone.transform.position);
-                    if (dist < nearest) {
-                        nearest = dist;
-                        nearestsci = item.Key.GetComponent<NetBody>();
-                    }
-                }
-            }
-            return (nearestsci, nearest);
-        }
-        public static (ScavPlayer, float) GetDistanceToNearestLivingPlayer(Vector2 target) {
-            float nearest = float.PositiveInfinity;
-            ScavPlayer nearestsci = null;
-            foreach (ScavPlayer plr in AllLivingPlayers) {
-                Body body = plr.body;
-                if (plr.body == null) {
-                    continue;
-                }
-
-                float dist = KM.DistanceSqr(body.transform.position, target);
-                if (dist < nearest) {
-                    nearest = dist;
-                    nearestsci = plr;
-                }
-            }
-            return (nearestsci, nearest);
-        }
-
 
         #endregion
 
         public bool LateJoin = false;
-
         public bool unchipped;
-
         public double levelPlayTime = 0;
         public CoUtils CoUtilsInstance;
         public UnityEvent OnNameChange = new();
 
-#if false
-        public class BondInfo : INetSerializeByMemcpy {
-            public ushort timesHealed = 0;
-            public ushort itemsUsed = 0;
-            public ushort timesAccessedInventory = 0;
-            public ushort timesHeAccessedMyInventory = 0;
-            public float timeCarried = 0;
-            public float timePiggybacked = 0;
-            public float timeStoodClose = 0; // within 10 units of each other
-
-            public float TODO;
-
-            public BondInfo() { 
-        
-            }
-        }
-
-        public Dictionary<string, BondInfo> all_bonding = new();
-#endif
-
-
-
         public bool IsInMinigame => minigame_current_type != 255;
         public SyncInfo minigame_currentItem_syncinfo {
             get {
-                if (ItemSync.TryGetItem(BasePlayer.MinigameCurrentItemId.Value, out SyncInfo si, out Item item)) {
+                if (ItemSync.TryGetItem(BasePlayer.MinigameCurrentItemId.Value, out SyncInfo si, out Item _)) {
                     return si;
                 }
                 return null;
@@ -363,7 +251,7 @@ namespace Together {
         }
         public Item minigame_currentItem {
             get {
-                if (ItemSync.TryGetItem(BasePlayer.MinigameCurrentItemId.Value, out SyncInfo si, out Item item)) {
+                if (ItemSync.TryGetItem(BasePlayer.MinigameCurrentItemId.Value, out SyncInfo _, out Item item)) {
                     return item;
                 }
                 return null;
@@ -386,7 +274,7 @@ namespace Together {
         public AnyObjectNetId minigame_targetobject { get { return BasePlayer.MinigameTargetObjectId.Value; } set { BasePlayer.MinigameTargetObjectId.Value = value; } }
         public ushort minigame_session { get { return BasePlayer.MinigameSessionId.Value; } set { BasePlayer.MinigameSessionId.Value = value; } }
         public Type MinigameType => MinigameMPManager.GetMinigameTypeFromIdNullable(minigame_current_type);
-        public byte minigame_current_type { get { return BasePlayer.MinigameTypeId.Value; } set { BasePlayer.MinigameTypeId.Value = value; } } // 255 = none,  other numbers are from the minigame_ids dict
+        public byte minigame_current_type { get { return BasePlayer.MinigameTypeId.Value; } set { BasePlayer.MinigameTypeId.Value = value; } } // 255 = none, other numbers are from the minigame_ids dict
         public Vector2 minigame_handpos = Vector2.zero;
         public Vector2 minigame_mousepos = Vector2.zero;
         public byte minigame_handsprite = 2;
@@ -406,7 +294,6 @@ namespace Together {
         public bool server_mute_vc { get { return BasePlayer.MuteVC.Value; } set { BasePlayer.MuteVC.Value = value; } }
         public bool server_mute_tc { get { return BasePlayer.MuteTC.Value; } set { BasePlayer.MuteTC.Value = value; } }
 
-
         public Vector2 pos {
             get {
                 if (IsAlive()) {
@@ -421,7 +308,6 @@ namespace Together {
             }
         }
 
-
         public const string OBJNAMEPREFIX_PLR = "PlayerObject_";
         public const string OBJNAMEPREFIX_NAMETAG = "PlayerNameTag_";
 
@@ -433,25 +319,19 @@ namespace Together {
         [Obsolete("probably?")]
         public void OnFinishTutorial(bool tp = true) {
             if (!_tutorial_finished) {
-
                 _tutorial_finished = true;
-
                 Chat.Server_ChatAnnouncement($"<plr:{playerId}> <key:plr_finished_tutorial>");
-
             }
         }
 
         public bool finishedLayer = false;
 
         public double ping = -0.01;
-        public double rtt_in_seconds_with_margin => ping * 4.1; // should be 2.01,  but more is better placebo
+        public double rtt_in_seconds_with_margin => ping * 4.1;
         public int ping_as_ms => (int)(ping * 1000);
 
-
-        // kid named finger 
         public GameObject locationPingCircle = null;
         public GameObject locationPingArrow = null;
-
 
         public GameObject chara => body.transform.parent.gameObject;
         public Body body;
@@ -468,8 +348,6 @@ namespace Together {
             return false;
         }
 
-
-        public static ScavPlayer LocalPlayer;
         [Obsolete("Use NetBody.TryGetLocalNetBody")]
         public static bool TryGetLocalNetBody(out NetBody nb) {
             return NetBody.TryGetLocalNetBody(out nb);
@@ -489,121 +367,19 @@ namespace Together {
             return $"PLR(ID:{playerId}, name:{playerName})";
         }
 
-        public static ScavPlayer GetPlayerFromClientId(knetid clientid) {
-            return ScavPlayer.ClientIdToPlayerDict.GetValueSafe(clientid);
-        }
-
-
-        public static bool TryGetPlayerFromClientId(knetid clientid, out ScavPlayer plr) => ScavPlayer.ClientIdToPlayerDict.TryGetValue(clientid, out plr);
-        public static bool TryGetPlayerAndBodyFromClientId(knetid clientid, out ScavPlayer plr, out Body body) {
-            if (ScavPlayer.ClientIdToPlayerDict.TryGetValue(clientid, out plr) && plr.body != null) {
-                body = plr.body;
-                return true;
-            }
-            plr = null;
-            body = null;
-            return false;
-        }
-        public static bool TryGetPlayerAndNetBodyFromClientId(knetid clientid, out ScavPlayer plr, out NetBody pb) {
-            if (ScavPlayer.ClientIdToPlayerDict.TryGetValue(clientid, out plr) && plr.body != null) {
-                pb = plr.netBody;
-                return true;
-            }
-            plr = null;
-            pb = null;
-            return false;
-        }
-
-
-        public static Body GetBodyFromClientId(knetid clientid) {
-            ScavPlayer plr = GetPlayerFromClientId(clientid);
-            if (plr != null) {
-                return plr.body;
-            }
-            return null;
-        }
-        public static knetid GetClientIdFromBody(Body body) {
-            NetBody pb = body.GetComponent<NetBody>();
-            return pb.netId;
-        }
-        public static ScavPlayer GetPlayerFromBody(Body body) {
-            return ScavPlayer.BodyToPlayerDict.GetValueSafe(body);
-        }
-
-        static TMP_FontAsset s_retroGamingFontAsset = null;
-
-        public void ApplyNameAndColor(string name, Color24 color) {
-
-
-
-            if (BasePlayer != null) {
-                if (Net.IsServer) {
-                    BasePlayer.playerName.Value = name;
-                    BasePlayer.playerColor.Value = color;
-                }
-            }
-
-
-            // the synced name is the one that player connected with. do not replace it with this machine's friend cache.
-            nameIsCustom = true;
-
-
-            // check for weird characters 
-            {
-                if (s_retroGamingFontAsset == null) {
-                    IEnumerable<TMP_FontAsset> ggggfd = GameObject.FindObjectsOfType<TextMeshProUGUI>().Select(x => x.font);
-                    s_retroGamingFontAsset = ggggfd.FirstOrDefault(x => x != null && x.name == "Retro GamingPix");
-                }
-                if (s_retroGamingFontAsset != null) {
-                    name = FontUtils.ReplaceMissingCharacters(s_retroGamingFontAsset, name);
-                }
-            }
-
-
-            bool changed_name = nameIsCustom && playerName != name;
-            bool changed_color = playerColor != color;
-            playerName = name;
-            playerColor = color;
-            gameObject.name = ScavPlayer.OBJNAMEPREFIX_PLR + name;
-
-
-            Color color_float = (Color)color;
-            Color slightlytransparent = new Color(color_float.r, color_float.g, color_float.b, 0.9f);
-            Color transparent = new Color(color_float.r, color_float.g, color_float.b, 0f);
-
-            if (body != null) {
-                netBody.ApplyNameAndColor(name, color);
-            }
-
-            if (locationPingCircle) {
-                locationPingCircle.name = ("fingerpointercircle_" + playerName);
-                SpriteRenderer spr = locationPingCircle.GetOrAddComponent<SpriteRenderer>();
-                spr.color = transparent;
-            }
-            if (locationPingArrow) {
-                locationPingArrow.name = ("fingerpointerarrow_" + playerName);
-                SpriteRenderer spr = locationPingArrow.GetOrAddComponent<SpriteRenderer>();
-                spr.color = transparent;
-            }
-
-        }
-
-
         private void FixedUpdate() {
             using FindTheBugInator.Scope _bug = FindTheBugInator.Time(FindTheBugInator.Players);
 
             if (Net.IsServer) {
                 if (Util.IsInWorld()) {
                     if (Util.IsWorldGenerated()) {
-
                         if (body != null && !body.IsBodyLocal()) {
-                            //OG: PlayerCamera.FixedUpdate V7.0.1 
-                            if (ItemSync.TryGetItem(DragItemId, out SyncInfo si, out Item dragItem) && dragItem.rb.simulated && Vector2.Distance(dragItem.transform.position, body.transform.position) < 10f) {
+                            //OG: PlayerCamera.FixedUpdate V7.0.1
+                            if (ItemSync.TryGetItem(DragItemId, out SyncInfo _, out Item dragItem) && dragItem.rb.simulated && Vector2.Distance(dragItem.transform.position, body.transform.position) < 10f) {
                                 dragItem.rb.velocity *= 0.85f;
                                 dragItem.rb.angularVelocity *= 0.85f;
                             }
                         }
-
                     } else {
                         ServerPlayerState.is_loaded_in = false;
                     }
@@ -615,26 +391,7 @@ namespace Together {
             } else {
                 levelPlayTime = 0;
             }
-            if (!body) {
-                return;
-            }
-
-
         }
-
-        public bool IsInSameTeamAs(ScavPlayer plr) {
-            return this.playerColor == plr.playerColor;
-        }
-        public List<ScavPlayer> GetTeamPlayers() {
-            List<ScavPlayer> plrs = new List<ScavPlayer>(ScavPlayer.AllPlayers);
-
-            plrs.RemoveAll(x => (
-                !this.IsInSameTeamAs(x)
-            ));
-
-            return plrs;
-        }
-
 
         void Awake() {
             DontDestroyOnLoad(this.gameObject);
@@ -642,88 +399,9 @@ namespace Together {
             if (Net.IsServer) {
                 ServerPlayerState = new Server_PlayerState(this);
             }
-
-            //in Awake nothing is set yet, so do all the stuff in Start
         }
-
-        #region COLOR_BULLSHIT
-        public Color24 playerColor = Color.black;
-
-
-        public static Color[] DEFAULT_TEAMS = new Color[] {
-            Color.red,
-            Color.blue,
-            Color.green,
-            Color.yellow,
-        };
-
-        public static Color[] NAMETAG_DEFAULT_COLORS = new Color[] {
-            Color.red,
-            Color.green,
-            Color.blue,
-            Color.cyan,
-            Color.yellow,
-            Color.magenta,
-            Color.white
-        };
-        public static Color[] NAMETAG_DEFAULT_COLORS_RANDOMIZED = new Color[] {
-            Color.red,
-            Color.green,
-            Color.blue,
-            Color.cyan,
-            Color.yellow,
-            Color.magenta,
-            Color.white
-        };
-        private static byte SERVER_NAMETAG_COLOR_PICKER_COUNTER = 0;
-
-        public static bool CheckIfPlrColorIsValid(Color24 c) {
-            if (c.Sum() < 153) {
-                return false;
-            }
-            return true;
-        }
-
-        static Color24 PickNewPlayerColor() {
-
-            for (int i = 0; i < NAMETAG_DEFAULT_COLORS.Length; i++) {
-                if (SERVER_NAMETAG_COLOR_PICKER_COUNTER >= NAMETAG_DEFAULT_COLORS.Length) {
-                    SERVER_NAMETAG_COLOR_PICKER_COUNTER = 0;
-                }
-                Color24 result = (Color24)NAMETAG_DEFAULT_COLORS[SERVER_NAMETAG_COLOR_PICKER_COUNTER];
-
-                SERVER_NAMETAG_COLOR_PICKER_COUNTER += 1;
-
-                if (ClientIdToPlayerDict.Values.Any(x => x.playerColor == result)) {
-                    continue;
-                }
-                return result;
-            }
-
-            for (int i = 0; i < 200; i++) {
-                Color24 result = new Color24((byte)UnityEngine.Random.Range(0, 255), (byte)UnityEngine.Random.Range(0, 255), (byte)UnityEngine.Random.Range(0, 255));
-
-                //dont allow it to be too dark
-                if (!CheckIfPlrColorIsValid(result)) {
-                    result[UnityEngine.Random.Range(0, 3)] = (byte)UnityEngine.Random.Range(200, 255);
-                }
-
-                if (ClientIdToPlayerDict.Values.Any(x => x.playerColor == result)) {
-                    continue;
-                }
-                return result;
-            }
-
-            log.error($"COULDN'T PICK A NEW COLOR FOR A PLAYER AAAAAAAAA WTFFFFF!!?!?!?!?");
-            return NAMETAG_DEFAULT_COLORS.PickRandom();
-
-        }
-
-        #endregion
 
         void Start() {
-
-
             {
                 {
                     locationPingCircle = new GameObject("fingerpointercircle");
@@ -753,10 +431,8 @@ namespace Together {
             }
             KnownPersons.LoadTagsFor(this);
 
-
             {
                 if (Net.IsServer) {
-
                     if (!IsLocal) {
                         try {
                             ServerMain._Server_OnServerNameChange(new List<knetid> { playerId });
@@ -768,7 +444,6 @@ namespace Together {
                     if (!CheckIfPlrColorIsValid(playerColor)) {
                         playerColor = PickNewPlayerColor();
                     }
-
 
                     name = ScavPlayer.OBJNAMEPREFIX_PLR + playerName;
 
@@ -789,7 +464,6 @@ namespace Together {
                     }
                 }
 
-
                 ScavPlayer.ClientIdToPlayerDict[this.playerId] = this;
                 vc_output = this.GetOrAddComponent<VoicechatOutput>();
 
@@ -802,7 +476,6 @@ namespace Together {
                     CoUtilsInstance = CoUtilsMultiplayer.GetLocalCoUtilsInstance();
 
                     if (!IS_STEAM) {
-                        // set my own name 
                         playerName = UIMainMenu.USERINPUT_NAME;
                     }
 
@@ -810,17 +483,14 @@ namespace Together {
 
                     LocalPlayer = this;
                 } else {
-                    //OG: CoUtils.instance getter V5Demo 
+                    //OG: CoUtils.instance getter V5Demo
                     GameObject obj = new GameObject($"CoUtils_{playerId}_{playerName}");
                     CoUtilsInstance = obj.AddComponent<CoUtils>();
                     obj.transform.SetParent(this.transform);
-
                 }
 
 #if FULLGAME
                 // mid-run join: spawn ONLY after species known (save) or client Join-picks.
-                // never CreateCharacter while pending pick - worldgen CreatePlayerCharacters used to
-                // mint default Expie during LateJoinCharSelect.
                 if (Net.IsServer && LateJoin && !IsLocal) {
                     if (CharacterSelectWait.TryResolveSavedSpecies(this, out byte savedChr)) {
                         selectedCharacter = savedChr;
@@ -837,14 +507,12 @@ namespace Together {
                 CreateCharacter();
 #endif
 
-
-
-                // update all the images, nametags n shi
                 ApplyNameAndColor(playerName, playerColor);
-
 
                 OnPlayerJoined?.Invoke(this);
                 OnPlayerJoinedUE?.Invoke(this);
+                TogetherNetworkApi.NotifyPlayerJoined(this);
+
                 InvokeRepeating(nameof(SlowUpdate), 1f, 1f);
                 InvokeRepeating(nameof(SlowButFastUpdate), 1f, 0.1f);
 
@@ -852,9 +520,7 @@ namespace Together {
                     Multiplayer.ApplyGameRules();
 
                     Util.DelayCallLambda(0.1f, () => {
-
                         if (this != null && !IsLocal && Util.IsInWorld()) { // and tell him to generate the world NOW
-
 #if FULLGAME
                             if (CharacterSelectWait.IsPendingLateJoin(playerId)) {
                                 // char select first - StartGameAnnouncement after they pick
@@ -873,30 +539,13 @@ namespace Together {
                             Net.Server_SendToClientsVeryReliable(writer, new List<knetid> { playerId });
 
                             ServerMain.Server_AnnounceSeed(new List<knetid> { playerId });
-
                         }
                     });
                 }
             }
-
-
-
         }
-
-
-
-        public string GetPersistentId() {
-            if (Net.IsRunningSteam) {
-                return "STEAM_" + SteamId.ToString();
-            }
-
-
-            return "NAME_" + playername_as_hex;
-        }
-        public string playername_as_hex => Encoding.UTF8.GetBytes(playerName).ToHexString();
 
         void SlowUpdate() {
-
             if (Net.IsServer) {
                 if (body != null) {
                     if (Util.IsWorldGenerated()) {
@@ -907,330 +556,26 @@ namespace Together {
                     }
                 }
             }
-
         }
+
         public List<NetBody> visiblebodies = new();
-        static NetDataWriter ragdollpacketwriter = Net.CreateWriter(NetmsgId.CLIENT_ragdollpack);
         void SlowButFastUpdate() {
             visiblebodies.Clear();
             if (Net.IsServer) {
                 if (Util.IsWorldGenerated()) {
+                    NetBody.GetBodiesInRadius(pos, GameplayRanges.RagdollSyncGroupRadius, visiblebodies);
 
-                    NetBody.GetBodiesInRadius(pos, 40, visiblebodies);
-
-                    //if (ServerPlayerState.is_loaded_in) 
-                    {
-                        //server_SendRagdollPackets();
-
-                        foreach (SyncBody otherBody in Net.ServerEntityManager.GetEntities<SyncBody>()) {
-                            Net.ServerEntityManager.ToggleSyncGroup(
-                                (byte)playerId,
-                                otherBody,
-                                SyncGroup.SyncGroup3,
-                                ServerPlayerState.is_loaded_in && !otherBody._standing.Value && !otherBody._isPiggyback.Value && otherBody.nb.plr != this && visiblebodies.Contains(otherBody.nb)
-                            );
-                        }
+                    foreach (SyncBody otherBody in Net.ServerEntityManager.GetEntities<SyncBody>()) {
+                        Net.ServerEntityManager.ToggleSyncGroup(
+                            (byte)playerId,
+                            otherBody,
+                            SyncGroup.SyncGroup3,
+                            ServerPlayerState.is_loaded_in && !otherBody._standing.Value && !otherBody._isPiggyback.Value && otherBody.nb.plr != this && visiblebodies.Contains(otherBody.nb)
+                        );
                     }
                 }
             }
         }
-
-
-
-        // is called also from LES on sync
-        public void SetUnchipped(bool unchipped) {
-            if (WorldMP.RunUnchippedLock.BlocksLocalChange(unchipped)) {
-                return;
-            }
-
-            if (body != null && netBody.unchipped != unchipped) {
-                netBody.SetUnchipped(unchipped);
-            }
-
-            if (this.unchipped != unchipped) {
-                this.unchipped = unchipped;
-            }
-
-            if (IsLocal) {
-                Util.SetUnchipped(unchipped);
-            }
-
-        }
-
-
-
-
-        public bool HasGunEquipped(out GunScript gun) {
-            if (body != null && body.conscious &&
-                //OG: PlayerCamera.GunToggleSafety  and others where they check for a gun
-                body.HoldingItem(body.handSlot) && body.GetItem(body.handSlot).TryGetComponent(out GunScript component)
-            ) {
-                gun = component;
-                return true;
-            }
-            gun = null;
-            return false;
-        }
-
-
-        public bool CanCommunicateWith_TextChat(ScavPlayer target) {
-            if (target == this) {
-                return true;
-            }
-            if (target != null) {
-                if (Util.IsTutorialWorld()) {
-                    return true;
-                }
-                bool targetisalive = target.body == null || target.body.alive;
-                bool iamalive = body == null || body.alive;
-                if (!iamalive && targetisalive && !(Multiplayer.rules.DeadTextchat)) {
-                    return false;
-                }
-                return true;
-            }
-            return false;
-        }
-
-
-
-
-        public void ResetEntropy() {
-            if (body != null) {
-                body.ResetEntropy();
-                netBody.SetNetHealthSyncIgnoreTime(0.1f);
-            }
-        }
-
-
-
-        public void CreateCharacter() {
-            if (Util.IsInMainMenu()) {
-                return;
-            }
-#if FULLGAME
-            // species pick gate - no default Experiment body before Join/Ready.
-            if (Net.IsServer && CharacterSelectWait.IsPendingLateJoin(playerId)) {
-                return;
-            }
-            // lobby gate only. a late joiner who already picked must still get a body
-            // even if Waiting was left set, or the host never sends them a spawn point.
-            if (Net.IsServer && CharacterSelectWait.Waiting && !LateJoin) {
-                return;
-            }
-#endif
-            if (Net.IsServer) {
-                NetBody.CreateNewPlayerCharacter(this);
-            }
-        }
-
-
-        public bool Server_HasForcedServerOwnershipOfBody() {
-            if (body != null) {
-                if (!body.alive) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        public void Server_DoAlertSingle(in string msg, bool reliable = true) => Server_DoAlertSingle(msg, false, reliable);
-        public void Server_DoAlertSingle(in string msg, bool important, bool reliable) {
-            NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_AnnounceDoAlert);
-            writer.Put(msg);
-            writer.Put(important);
-            Net.Server_SendToClients(reliable ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable, writer, clientIds: playerId);
-            // WRITER END;
-        }
-
-
-
-        public void Server_Kick(string message = "Kicked.") {
-
-            if (Net.TryGetSteamTransport(out TransportSteamworks _) && KnownPersons.IsSteamUserPrivileged(SteamId)) {
-                // kick protection
-                return;
-            }
-
-            try {
-                if (body != null) {
-                    body.Body_DropAllItems();
-                }
-            } catch (Exception e) {
-
-            }
-
-
-            string msg = $"Kicked {playerName}";
-            Chat.Server_ChatAnnouncement(msg);
-            try {
-                ServerMain.Server_SendMPLogMessage(msg + ": " + message, false, new knetid[] { playerId });
-            } catch (Exception e) {
-                log.error(e);
-            }
-
-            Net.Server_Kick(playerId, message);
-        }
-
-
-
-        public void Server_ReviveCharacter(bool remind_health_now = true, bool unmindwipe = false) {
-            if (Util.IsInWorld()) {
-                CreateCharacter();
-
-                if (!body.alive) {
-                    if (!Multiplayer.rules.RespawnKeepSkills) {
-                        body.ResetMind();
-                    }
-                }
-
-                body.ResetHealth(unmindwipe);
-
-
-                if (remind_health_now) {
-                    MedicalSync.Server_SendCharacterHealth(netBody);
-                }
-            }
-        }
-        // used for teleporting
-        public void Server_RemindPlayersCurrentState(bool keep_velocity = false, bool reliable = true) {
-
-            if (TryGetNetBody(out NetBody nb)) {
-                if (!keep_velocity) {
-                    body.SetVelocity(Vector2.zero);
-                }
-                nb.Server_RemindPlayersCurrentState(reliable);
-            } else {
-                if (log.verbose) {
-                    log.warn($"Attempted to remind body state of {this} but theres no body.");
-                }
-            }
-
-        }
-
-        public void Server_TeleportCharacter(Vector2 pos) {
-            if (Util.IsInWorld()) {
-                CreateCharacter();
-
-                if (IsLocal) {
-                    UIInGame._DEV_FREECAM_CURPOS = pos;
-                }
-
-                netBody.SetBodyPosition(pos);
-
-                if (!this.IsLocal) {
-                    WorldChunkSync.Server_CheckPlrPosChunk(this);
-                }
-
-                Server_RemindPlayersCurrentState();
-            }
-        }
-        public void Server_RespawnCharacter(Vector2 pos, bool level_transition = false) {
-            if (Util.IsInWorld()) {
-                CreateCharacter();
-
-                if (level_transition && !Multiplayer.rules.RespawnKeepInventory) {
-                    Server_DropAllInventory();
-                }
-
-                if (!Multiplayer.rules.RespawnKeepSkills) {
-                    body.ResetMind();
-                }
-
-                bool should_unmindwipe = !Multiplayer.rules.RespawnKeepSkills;
-
-                netBody.StopPiggyback();
-
-                Server_ReviveCharacter(true, should_unmindwipe);
-                body.ForceStand();
-
-                Server_TeleportCharacter(pos);
-
-            }
-        }
-        // can be called from client btw  
-        public void Server_DropAllInventory() {
-            body?.Body_DropAllItems();
-        }
-        public void Server_HealCharacter() {
-            Server_ReviveCharacter(false);
-        }
-
-
-
-
-        public bool IsAtTheEndOfLayer() {
-            if (body == null) { return false; }
-            return ServerMain.DidHeFinishTheLayer(body);
-        }
-
-
-
-
-        public const double FINGERPOINTINGTIME_MAX = 3.0;
-        public bool is_pointingfingerat = false;
-        public byte is_pointingfingeratTYPE = 0;
-        public double is_pointingfingeratTIME = -9990.0;
-        public Vector2 is_pointingfingeratTARGET = Vector2.zero;
-
-        public void PointFingerAt(Vector2 pos, byte type) {
-            bool alive = false;
-            if (body) {
-                alive = body.conscious;
-                body.overrideLookTime = (float)(FINGERPOINTINGTIME_MAX - 0.5);
-                body.overrideLookPos = pos;
-            }
-
-            is_pointingfingerat = ((Multiplayer.rules.CanCommunicateWithTheDeadTC()) || alive);
-            is_pointingfingeratTIME = Time.realtimeSinceStartupAsDouble;
-            is_pointingfingeratTARGET = pos;
-            is_pointingfingeratTYPE = type;
-            SpriteRenderer spr = locationPingCircle.GetComponent<SpriteRenderer>();
-
-            if (type == 0) {
-                spr.sprite = CoopModAssets.circlething;
-            } else if (type == 1) {
-                spr.sprite = CoopModAssets.alert2;
-            } else {
-                spr.sprite = CoopModAssets.circlething;
-            }
-
-        }
-
-
-#if !RELEASE
-        void OnGUI() {
-            if (log.verbose) {
-                if (IsInMinigame && minigame_targetobject.TryGetGameObject(out GameObject go)) {
-
-                    int ogfont = GUI.skin.label.fontSize;
-
-                    Vector2 pos = (Vector2)Camera.main.WorldToScreenPoint(go.transform.position);
-                    pos = new Vector2(pos.x, Screen.height - pos.y);
-
-                    if (pos.x > 0 && pos.y > 0 && pos.x < Screen.width && pos.y < Screen.width) {
-
-                        const float bsize = 17;
-                        const float elsize = 13;
-
-                        float y = 0;
-
-                        GUI.skin.label.normal.textColor = UnityEngine.Color.white;
-
-                        GUI.skin.label.fontSize = 10;
-                        GUI.Label(new Rect(pos.x, pos.y + y, 400, 200), $"MG: {this}\nT: {minigame_current_type}\nSESSION: {minigame_session}\nTARGET: {go}\nITEM: {minigame_currentItem_syncinfo}");
-
-                    }
-
-
-
-
-                    GUI.skin.label.normal.textColor = UnityEngine.Color.white;
-                    GUI.skin.label.fontSize = ogfont;
-
-                }
-            }
-        }
-#endif
 
         private void Update() {
             using FindTheBugInator.Scope _bug = FindTheBugInator.Time(FindTheBugInator.Players);
@@ -1250,69 +595,11 @@ namespace Together {
                     }
                 }
             }
-
-
         }
-
 
         void LateUpdate() {
-
             _UpdateFingerPointVisual();
-
         }
-
-
-        void _UpdateFingerPointVisual() {
-
-            if (is_pointingfingerat) {
-                if (!Util.IsInWorld() || (Time.realtimeSinceStartupAsDouble - this.is_pointingfingeratTIME > ScavPlayer.FINGERPOINTINGTIME_MAX)) {
-                    this.is_pointingfingerat = false;
-                    locationPingCircle.SetActive(false);
-                    locationPingArrow.SetActive(false);
-                }
-            }
-            if (locationPingCircle != null && locationPingArrow != null) {
-                double ttttt = is_pointingfingeratTIME + Time.realtimeSinceStartupAsDouble;
-
-                SpriteRenderer circle_spr = locationPingCircle.GetComponent<SpriteRenderer>();
-                float new_alpha = Mathf.MoveTowards(circle_spr.color.a, is_pointingfingerat ? 1 : 0, Time.deltaTime * 2f);
-
-
-                bool keep_anim = (circle_spr.color.a + new_alpha) != 0;
-                if (locationPingCircle.activeSelf != keep_anim) {
-                    locationPingCircle.SetActive(keep_anim);
-                }
-                if (locationPingCircle.activeSelf) {
-                    Vector2 targetpos = is_pointingfingeratTARGET;
-                    float sine = ((float)Math.Sin(ttttt * 4.0));
-                    if (is_pointingfingeratTYPE == 1) {
-                        targetpos += Vector2.up * (4 + sine * 0.7f);
-                    }
-
-                    locationPingCircle.transform.position = KM.v3v2z(targetpos, -2.601f);
-                    locationPingCircle.transform.localScale = Vector3.one * (1f + sine * 0.3f) * 32f * 0.5f;
-
-                    circle_spr.color = playerColor.ToColorWithAlpha(
-                        new_alpha
-                    );
-                }
-
-                bool actually_do_arrow = body != null && keep_anim && IsConscious() && locationPingCircle.activeSelf && !KM.DistanceCheck(is_pointingfingeratTARGET, pos, 8f);
-                if (locationPingArrow.activeSelf != actually_do_arrow) {
-                    locationPingArrow.SetActive(actually_do_arrow);
-                }
-                if (locationPingArrow.activeSelf) {
-                    Vector2 dir = KM.NormalTo(is_pointingfingeratTARGET, body.transform.position, out float _);
-                    locationPingArrow.transform.position = KM.v3v2z(((Vector2)body.transform.position - (dir * 4f) + (dir * (float)Math.Sin(ttttt * 4.0) * 1f)), -2.6f);
-                    locationPingArrow.transform.eulerAngles = new Vector3(0, 0, Vector2.SignedAngle(Vector2.right, dir) + 180f);
-
-                    SpriteRenderer arrow_spr = locationPingArrow.GetComponent<SpriteRenderer>();
-                    arrow_spr.color = circle_spr.color;
-                }
-
-            }
-        }
-
 
         public void DestroyCharacterIfNoLocal() {
             if (body != null) {
@@ -1324,11 +611,6 @@ namespace Together {
                         WoundView.view.body = PlayerCamera.main.body;
                     }
 
-
-                    // server_DropAllInventory();
-                    // leave gear stays parked under SAVESTATE_ (or dies with the body).
-                    // ground-dropping on disconnect never worked.
-
                     ScavPlayer.BodyToPlayerDict.Remove(body);
 
                     NetBody.DestroyNPC(body);
@@ -1337,11 +619,7 @@ namespace Together {
             }
         }
 
-        void Test(ScavPlayer plr) {
-
-        }
         public void OnDestroy() {
-
             try {
                 // host only. clients that also built PlayerSavedState parked gear under a local
                 // sAVESTATE_ without DetachSyncKeepMesh, then path5 fought a loose trashbag ghost.
@@ -1349,14 +627,12 @@ namespace Together {
 #if TESTING
                     log.l($"Saved player state of {this}");
 #endif
-                    // the suitcase is taken apart on the next descent. the file is what a later layer can load.
                     PlayerCheckpoint.WriteOne(this, false);
                     ServerMain.Server_LastPlayerStates[GetPersistentId()] = (new PlayerSavedState(body));
                 }
             } catch (Exception e) {
                 log.error($"{nameof(ScavPlayer)}.{nameof(OnDestroy)}: saving plr state: " + e.ToString());
             }
-
 
             if (ScavPlayer.ClientIdToPlayerDict.TryGetValue(this.playerId, out ScavPlayer currentPlayer) &&
                 ReferenceEquals(currentPlayer, this)) {
@@ -1371,6 +647,7 @@ namespace Together {
             }
 
             OnPlayerLeftUE?.Invoke(this);
+            TogetherNetworkApi.NotifyPlayerLeft(this);
 
             try {
                 if (Net.IsServer && Net.IsRunning) {
@@ -1383,7 +660,7 @@ namespace Together {
             }
 
 #if TESTING
-            if (log.verbose)   { log.l($"{this}: OnDestroy  {this.name}  islocal: {IsLocal}  hasbody: { body != null}"); }
+            if (log.verbose) { log.l($"{this}: OnDestroy  {this.name}  islocal: {IsLocal}  hasbody: {body != null}"); }
 #endif
 
             DestroyCharacterIfNoLocal();
@@ -1402,16 +679,10 @@ namespace Together {
                 Destroy(locationPingArrow);
             }
 
-
 #if DO_QUEUE_IDS
             if (clientId != 0 && !Net._QUEUED_PLAYER_IDS_TO_REUSE.Contains(clientId))
                 Net._QUEUED_PLAYER_IDS_TO_REUSE.Enqueue(clientId);
 #endif
         }
-
-
-
-
-
     }
 }

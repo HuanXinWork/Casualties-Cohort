@@ -79,7 +79,7 @@ internal static class FixCompressWriter
 					return false;
 				}
 				result = CompressPool.CopyExact(CompressPool.GzipDecOut);
-				FixUtilDecompress.Hits++;
+				CompressPool.GunzipHits++;
 				return true;
 			}
 			catch (Exception ex)

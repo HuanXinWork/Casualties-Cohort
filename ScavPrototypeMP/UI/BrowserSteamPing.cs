@@ -1,25 +1,28 @@
 using Steamworks;
 using System;
 using System.Collections.Generic;
+using Together.Diagnostics;
 using UnityEngine;
 
 namespace Together;
 
-// real RTT via short-lived SteamNetworkingSockets ConnectP2P on a dedicated virtual port.
-// hosts listen on VirtualPort and accept+close; browsers connect, read m_nPing, then close.
+/// <summary>
+/// 服务器浏览器专用 Steam Relay P2P 真实延迟（RTT）短连接探测器。
+/// 主机在专用虚拟端口 <see cref="VirtualPort"/> 监听并在握手后立即断开；浏览器侧连接读取 <c>m_nPing</c> 后即刻回收句柄。
+/// </summary>
 internal static class BrowserSteamPing {
     public const int VirtualPort = 13;
     public const int MaxConcurrent = 6;
-    const float ProbeTimeoutSeconds = 4f;
+    private const float ProbeTimeoutSeconds = 4f;
 
     public static HSteamListenSocket HostListen = HSteamListenSocket.Invalid;
 
-    static Callback<SteamNetConnectionStatusChangedCallback_t> _callback;
-    static readonly SteamNetworkingConfigValue_t[] EmptyOptions = Array.Empty<SteamNetworkingConfigValue_t>();
-    static readonly Dictionary<HSteamNetConnection, Probe> Probes = new Dictionary<HSteamNetConnection, Probe>();
-    static readonly HashSet<ulong> InFlightOwners = new HashSet<ulong>();
+    private static Callback<SteamNetConnectionStatusChangedCallback_t> _callback;
+    private static readonly SteamNetworkingConfigValue_t[] EmptyOptions = Array.Empty<SteamNetworkingConfigValue_t>();
+    private static readonly Dictionary<HSteamNetConnection, Probe> Probes = new Dictionary<HSteamNetConnection, Probe>();
+    private static readonly HashSet<ulong> InFlightOwners = new HashSet<ulong>();
 
-    sealed class Probe {
+    private sealed class Probe {
         public NetPublicServerInfo Info;
         public ulong OwnerId;
         public HSteamNetConnection Conn;
@@ -47,7 +50,7 @@ internal static class BrowserSteamPing {
         }
         HostListen = SteamNetworkingSockets.CreateListenSocketP2P(VirtualPort, 0, EmptyOptions);
         if (HostListen == HSteamListenSocket.Invalid) {
-            Together.log.warn("[BrowserPing] failed to create host ping listen socket");
+            ModLog.Warning("[BrowserPing] 创建主机测速监听端口失败", LogDomain.Transport);
         }
     }
 
@@ -67,7 +70,9 @@ internal static class BrowserSteamPing {
         return Probes.ContainsKey(conn);
     }
 
-    // transportSteamworks must ignore these so ping probes are not treated as players.
+    /// <summary>
+    /// 供 <see cref="TransportSteamworks"/> 分流拦截测速连接回调，防止测速短连接被误当作正式玩家连接处理。
+    /// </summary>
     public static bool HandleTransportCallback(SteamNetConnectionStatusChangedCallback_t cb) {
         if (IsHostPingListen(cb.m_info.m_hListenSocket)) {
             HandleHostSide(cb);
@@ -111,13 +116,12 @@ internal static class BrowserSteamPing {
             return false;
         }
 
-        Probe probe = new Probe {
+        Probes[conn] = new Probe {
             Info = info,
             OwnerId = ownerId,
             Conn = conn,
             StartedAt = Time.realtimeSinceStartup,
         };
-        Probes[conn] = probe;
         InFlightOwners.Add(ownerId);
         return true;
     }
@@ -132,17 +136,8 @@ internal static class BrowserSteamPing {
         foreach (KeyValuePair<HSteamNetConnection, Probe> kv in Probes) {
             Probe probe = kv.Value;
             TryReadPing(probe);
-            if (probe.GotPing) {
-                if (done == null) {
-                    done = new List<HSteamNetConnection>();
-                }
-                done.Add(kv.Key);
-                continue;
-            }
-            if (now - probe.StartedAt >= ProbeTimeoutSeconds) {
-                if (done == null) {
-                    done = new List<HSteamNetConnection>();
-                }
+            if (probe.GotPing || now - probe.StartedAt >= ProbeTimeoutSeconds) {
+                done ??= new List<HSteamNetConnection>();
                 done.Add(kv.Key);
             }
         }
@@ -162,39 +157,34 @@ internal static class BrowserSteamPing {
         }
     }
 
-    static void TryReadPing(Probe probe) {
+    private static void TryReadPing(Probe probe) {
         if (probe == null || probe.GotPing) {
             return;
         }
         SteamNetConnectionRealTimeStatus_t status = new SteamNetConnectionRealTimeStatus_t();
         SteamNetConnectionRealTimeLaneStatus_t lane = new SteamNetConnectionRealTimeLaneStatus_t();
         EResult result = SteamNetworkingSockets.GetConnectionRealTimeStatus(probe.Conn, ref status, 0, ref lane);
-        if (result != EResult.k_EResultOK) {
-            return;
-        }
-        int ms = status.m_nPing;
-        if (ms < 0) {
+        if (result != EResult.k_EResultOK || status.m_nPing < 0) {
             return;
         }
         if (probe.Info != null) {
-            probe.Info.pingMs = ms;
+            probe.Info.pingMs = status.m_nPing;
         }
         probe.GotPing = true;
     }
 
-    static void HandleHostSide(SteamNetConnectionStatusChangedCallback_t cb) {
+    private static void HandleHostSide(SteamNetConnectionStatusChangedCallback_t cb) {
         ESteamNetworkingConnectionState state = cb.m_info.m_eState;
         if (state == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connecting) {
             SteamNetworkingSockets.AcceptConnection(cb.m_hConn);
             return;
         }
         if (state == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected) {
-            // real RTT is available on the probe side; drop the acceptor immediately.
             SteamNetworkingSockets.CloseConnection(cb.m_hConn, 0, "browser_ping", false);
         }
     }
 
-    static void HandleProbeSide(SteamNetConnectionStatusChangedCallback_t cb) {
+    private static void HandleProbeSide(SteamNetConnectionStatusChangedCallback_t cb) {
         if (!Probes.TryGetValue(cb.m_hConn, out Probe probe)) {
             return;
         }
@@ -215,24 +205,20 @@ internal static class BrowserSteamPing {
         }
     }
 
-    static void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t cb) {
-        // when transport is up it also gets this callback; HandleTransportCallback covers that path.
-        // this standalone callback covers browser-open-without-net.
+    private static void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t cb) {
+        // 当正式 Steam 传输层运行时由 TransportSteamworks 转发回调，此处仅处理主菜单未联网浏览大厅场景
         if (Net.IsRunning && Net.TryGetSteamTransport(out _)) {
             return;
         }
         HandleTransportCallback(cb);
     }
 
-    static void FinishProbe(HSteamNetConnection conn, bool keepPing) {
+    private static void FinishProbe(HSteamNetConnection conn, bool keepPing) {
         if (!Probes.TryGetValue(conn, out Probe probe)) {
             return;
         }
         Probes.Remove(conn);
         InFlightOwners.Remove(probe.OwnerId);
-        if (!keepPing && probe.Info != null && probe.Info.pingMs < 0) {
-            // leave as unknown; do not invent a value
-        }
         SteamNetworkingSockets.CloseConnection(conn, 0, "browser_ping_done", false);
     }
 }

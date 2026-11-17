@@ -1,43 +1,33 @@
-using CasualtiesTogetherUtils;
-using HarmonyLib;
-using LiteNetLib;
-using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
-using System.Reflection;
-using System.Reflection.Emit;
-using System.Runtime.CompilerServices;
-using Together;
+using CasualtiesTogetherUtils;
+using HarmonyLib;
+using Together.Diagnostics;
+using Together.MpConstants;
 using Unity.VisualScripting;
 using UnityEngine;
-using static Together.TrackerTrader;
-using static TraderScript;
 
 namespace Together;
 
-
-
+/// <summary>
+/// 商人组件网络追踪器：负责交易窗口安全钉住（距离/敌对/存活保护）、焦点躯体切换与库存快照同步请求。
+/// </summary>
 public class TrackerTrader : BaseComponentTracker<TraderScript> {
     public static TraderScript currentTrader;
 
     public struct TraderStatePacket : INetSerializeByMemcpy {
-
         public float reputation;
         public float hostility;
-
         public bool freeDressing;
         public bool didHug;
-        public byte freeAmount; // its guranteed to be between 0 and 4
-
+        public byte freeAmount;
         public float haggleAmount;
-
-        public ushort valueGiven; // but honestly they both cant even reach 255
+        public ushort valueGiven;
         public ushort totalValueGiven;
 
         public TraderStatePacket(TrackerTrader tracker) {
-            var trader = tracker.og;
+            TraderScript trader = tracker.og;
             reputation = trader.reputation;
             hostility = trader.hostility;
             freeDressing = trader.freeDressing;
@@ -47,8 +37,9 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
             valueGiven = (ushort)trader.valueGiven;
             totalValueGiven = (ushort)trader.totalValueGiven;
         }
+
         public void Apply(TrackerTrader tracker) {
-            var trader = tracker.og;
+            TraderScript trader = tracker.og;
             trader.reputation = reputation;
             trader.hostility = hostility;
             trader.freeDressing = freeDressing;
@@ -58,53 +49,41 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
             trader.valueGiven = valueGiven;
             trader.totalValueGiven = totalValueGiven;
         }
-
     }
 
     public BodyGetterOverrider bgo => this.GetOrAddComponent<BodyGetterOverrider>();
 
-    // accessed by get_body in the override TraderScript
     public Body focused_body {
-        get {
-            return bgo.body;
-        }
-        set {
-            bgo.body = value;
-        }
+        get => bgo.body;
+        set => bgo.body = value;
     }
-
 
     public bool CanBeRecruited_ForRespawn() {
-        return build.GetHealth() > 200 && og.reputation > og.minHugReputation;
+        return build.GetHealth() > 200f && og.reputation > og.minHugReputation;
     }
 
-    public bool is_registered => (tracker != null);
+    public bool is_registered => tracker != null;
     public SyncInfo si => tracker?.syncInfo;
 
     public bool asked_for_inv { get; private set; }
-    public bool received_their_inv;// { get; private set; }
+    public bool received_their_inv;
 
     protected bool net_didDeathMoodDebuff = false;
-
     public BuildingEntity build => GetComponent<BuildingEntity>();
 
+    float doublesendRepState = 0f;
 
-
-
-
-    float doublesendRepState = 0;
     public void Server_AnnounceTraderReputationState(in IReadOnlyList<knetid> to_who = null) {
-        if (Net.IsClient || (og == null)) {
+        if (Net.IsClient || og == null)
             return;
-        }
         if (!is_registered) {
             NetObjectRegistry.NewGO(gameObject);
             if (!is_registered) {
-                log.error($"SERVER: trader snapshot skipped, {build?.id} is not registered");
+                ModLog.Error($"SERVER: trader snapshot skipped, {build?.id} is not registered", LogDomain.Trader);
                 return;
             }
         }
-        if ((to_who != null) && (to_who.Count == 1)) {
+        if (to_who != null && to_who.Count == 1) {
             TraderCommit.PublishTo(og, to_who[0]);
             return;
         }
@@ -112,16 +91,14 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
     }
 
     public void Server_SendTraderInventory(knetid clientId) {
-        if (og == null) {
+        if (og == null)
             return;
-        }
         TraderCommit.PublishTo(og, clientId);
     }
 
     public void Server_SendTraderInventory(List<knetid> clients_to_enlighten) {
-        if ((og == null) || (clients_to_enlighten == null) || (clients_to_enlighten.Count == 0)) {
+        if (og == null || clients_to_enlighten == null || clients_to_enlighten.Count == 0)
             return;
-        }
         if (clients_to_enlighten.Count == 1) {
             TraderCommit.PublishTo(og, clients_to_enlighten[0]);
             return;
@@ -129,13 +106,10 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
         TraderCommit.Publish(og);
     }
 
-
-    protected override void TrackerAwake() { // called in Awake()
-
+    protected override void TrackerAwake() {
         var owro = this.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
         owro.target = og;
         HookTraderPin();
-
     }
 
     void OnEnable() {
@@ -147,14 +121,15 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
     private static bool pinHooked;
 
     private static void HookTraderPin() {
-        if (pinHooked) {
+        if (pinHooked)
             return;
-        }
         pinHooked = true;
         Camera.onPostRender += PinOpenTrader;
     }
 
-    // 校验当前钉住的商人仍处于合法可交易状态（存活、非敌对、血量 > 200f，且本地角色存活清醒并在 8 格内）
+    /// <summary>
+    /// 校验当前钉住的商人仍处于合法可交易状态（非敌对、血量大于 200，且本机角色存活清醒并位于保持打开距离内）。
+    /// </summary>
     internal static bool CanKeepTradeMenuOpen(TraderScript trader) {
         if (trader == null || trader.hostile)
             return false;
@@ -162,7 +137,7 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
             return false;
         if (!Util.TryGetLocalBody(out Body local) || local == null || !local.alive || !local.conscious)
             return false;
-        return Vector2.Distance(trader.transform.position, local.transform.position) <= 8f;
+        return Vector2.Distance(trader.transform.position, local.transform.position) <= GameplayRanges.TraderMenuKeepOpenDistance;
     }
 
     internal static void ReleasePinnedTradeMenu(PlayerCamera cam) {
@@ -174,14 +149,10 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
             cam.ToggleTradeMenu();
     }
 
-    // stock LateUpdate clears currentTrader, and the next Update closes the menu while it is empty.
-    // onPreRender never ran on the trader. this camera callback is after OnWillRenderObject,
-    // so the trader the menu was opened on wins over a neighbour.
     private static void PinOpenTrader(Camera _) {
         PlayerCamera cam = PlayerCamera.main;
-        if (!Util.IsInTradingMenu() || (cam is null)) {
+        if (!Util.IsInTradingMenu() || cam is null)
             return;
-        }
         if (!CanKeepTradeMenuOpen(currentTrader)) {
             ReleasePinnedTradeMenu(cam);
             return;
@@ -192,67 +163,43 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
         tt.focused_body = Util.GetLocalBody();
     }
 
-
     void Start() {
-
         if (Net.IsRunning && Net.IsClient) {
             StartCoroutine(AskWhenReady());
         }
-
-
-        // fix the bug that makes traders teleport to world center (only if the traders is spawned through non-worldgen means aka command)
-        if (og.MoveRange.min == 0 && og.MoveRange.max == 0) {
-            og.MoveRange = new RangeF(og.transform.position.x - 5, og.transform.position.x + 5);
+        if (og.MoveRange.min == 0f && og.MoveRange.max == 0f) {
+            og.MoveRange = new RangeF(og.transform.position.x - 5f, og.transform.position.x + 5f);
         }
-
         StartCoroutine(ScanForNearestBody());
     }
 
-
-
-
-    // https://docs.unity3d.com/6000.0/Documentation/Manual/execution-order.html
-    // i need this execute before OnWillRenderObject, cuz i need to force call it when its outside of hosts view
     void LateUpdate() {
-        if (!Net.IsRunning) return;
+        if (!Net.IsRunning)
+            return;
 
         if (og.hostile) {
             build.cantHit = false;
         }
 
         if (Net.IsServer && is_registered) {
-
-            var field_didDeathMoodDebuff = Traverse.Create(og).Field("didDeathMoodDebuff");
-
-            var og_didDeathMoodDebuff = (bool)field_didDeathMoodDebuff.GetValue();
-
-            if (og_didDeathMoodDebuff && !net_didDeathMoodDebuff) {
+            bool ogDidDeathMoodDebuff = (bool)Traverse.Create(og).Field("didDeathMoodDebuff").GetValue();
+            if (ogDidDeathMoodDebuff && !net_didDeathMoodDebuff) {
                 net_didDeathMoodDebuff = true;
-
-                // traumatize everyone around except current body there
-                YOU_SHOULD_KILL_YOURSELF_NOOOW.DoMoodPenaltyInRadius(
-                    focused_body,
-                    5f // half of the original
-                    , 10
-                );
-
+                YOU_SHOULD_KILL_YOURSELF_NOOOW.DoMoodPenaltyInRadius(focused_body, 5f, (int)GameplayRanges.CraftGroundScanRadius);
             }
 
-            if (doublesendRepState > 0) {
+            if (doublesendRepState > 0f) {
                 doublesendRepState -= Time.deltaTime;
-
-                if (doublesendRepState < 0) {
+                if (doublesendRepState < 0f) {
                     Server_AnnounceTraderReputationState();
-                    doublesendRepState = -900; // reset it again
+                    doublesendRepState = -900f;
                 }
             }
-
         }
-
     }
 
     private IEnumerator ScanForNearestBody() {
-        while (this.gameObject && this.og) {
+        while (gameObject && og) {
             if (Net.IsRunning) {
                 bgo.SetNearestBody();
                 if (tracker && !tracker.isNearby) {
@@ -265,36 +212,27 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
 
     private IEnumerator AskWhenReady() {
         while (Net.IsClient && Net.IsRunning) {
-            SyncInfo si = this.si;
-            if ((si != null) && (si.syncId != 0)) {
+            SyncInfo sync = si;
+            if (sync != null && sync.syncId != 0) {
                 TraderCommit.Ask(this);
                 yield break;
             }
             yield return new WaitForSecondsRealtime(0.5f);
         }
     }
-
 }
-
-
 
 [HarmonyPatch(typeof(TraderScript), nameof(TraderScript.Start))]
 static class TraderScript_Start_MultiplayerPatch {
-    // stock Start rolls a fresh list and sets reputation back to 100.
-    // a reply that arrived first was wiped, and the host copy never came back until a sale.
     static bool Prefix(TraderScript __instance) {
-        if (!Net.IsRunning || !Net.IsClient) {
+        if (!Net.IsRunning || !Net.IsClient)
             return true;
-        }
         __instance.standAmount = 0f;
-        if (__instance.items == null) {
-            __instance.items = new List<TraderItem>();
-        }
+        __instance.items ??= new List<TraderItem>();
         return false;
     }
 
     static void Postfix(TraderScript __instance) {
-        // only add the tracker 
         __instance.GetOrAddComponent<TrackerTrader>();
         if (Net.IsRunning) {
             __instance.farEnoughToMove = true;
@@ -308,21 +246,14 @@ static class TraderScript_Start_MultiplayerPatch {
 
 [HarmonyPatch(typeof(TraderScript), nameof(TraderScript.DropInventory))]
 static class TraderScript_DropInventory_MultiplayerPatch {
-    static bool Prefix(TraderScript __instance) {
-        // inventory drops only on the server,  if im client do nothing and wait for server to spawn it
-        if (Net.IsRunning && Net.IsClient) {
-            //  __instance.items.Clear(); // i think its better not to, i it will not cause less issues this way
-            return false;
-        }
-        return true;
+    static bool Prefix() {
+        return !(Net.IsRunning && Net.IsClient);
     }
 }
 
-
-
 [HarmonyPatch(typeof(TraderScript), nameof(TraderScript.OnUse))]
 static class TraderScript_OnUse_MultiplayerPatch {
-    static bool Prefix(TraderScript __instance) { // the trader script is so shit idk
+    static bool Prefix(TraderScript __instance) {
         PlayerCamera.main.currentTrader = __instance;
         TrackerTrader.currentTrader = __instance;
         TraderPinLog.Sample("use");
@@ -333,58 +264,53 @@ static class TraderScript_OnUse_MultiplayerPatch {
     }
 }
 
-
-
-
+/// <summary>
+/// 拦截 <see cref="TraderScript"/> 渲染周期：客户端回退本地敌意自增以服从服务端快照，服务端监测敌意阈值阶段跃迁并及时推送。
+/// </summary>
 [HarmonyPatch(typeof(TraderScript), "OnWillRenderObject")]
 static class TraderScript_OnWillRender_PinLog {
     static readonly Dictionary<int, int> HostilityStage = new();
 
     static int StageOf(float hostility, float reputation) {
-        if (hostility >= 100f) {
+        if (hostility >= 100f)
             return 3;
-        }
-        if (hostility > 55f) {
+        if (hostility > 55f)
             return 2;
-        }
-        if (hostility > 30f) {
+        if (hostility > 30f)
             return 1;
-        }
-        if (reputation < 30f) {
+        if (reputation < 30f)
             return 0;
-        }
         return -1;
     }
 
     private static void Prefix(TraderScript __instance, out (float rep, float host) __state) {
-        __state = (__instance == null) ? default : (__instance.reputation, __instance.hostility);
-        // host combat must track whoever is actually close, not the first body that stuck.
-        if (Net.IsRunning && Net.IsServer && (__instance != null) && (TraderCommit.Actor == null)) {
+        __state = __instance == null ? default : (__instance.reputation, __instance.hostility);
+        if (Net.IsRunning && Net.IsServer && __instance != null && TraderCommit.Actor == null) {
             TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
             tt.bgo.SetNearestBody();
         }
     }
-    private static void Postfix(TraderScript __instance, (float rep, float host) __state) {
-        // stock ramps hostility on every machine. the host snapshot is the copy that counts.
-        if (Net.IsRunning && Net.IsClient && (__instance != null)) {
+
+    // 使用 ref 接收 ValueTuple __state，消除 BepInEx.Analyzers Harmony003 非 ref 结构体访问告警
+    private static void Postfix(TraderScript __instance, ref (float rep, float host) __state) {
+        if (Net.IsRunning && Net.IsClient && __instance != null) {
             __instance.reputation = __state.rep;
             __instance.hostility = __state.host;
         }
-        if (Net.IsRunning && Net.IsServer && (__instance != null)) {
-            // nearest-body retarget can point currentTrader at a remote. keep the host menu on the local body only.
-            if ((PlayerCamera.main != null) && (PlayerCamera.main.currentTrader == __instance) && !Util.IsInTradingMenu()) {
+        if (Net.IsRunning && Net.IsServer && __instance != null) {
+            if (PlayerCamera.main != null && PlayerCamera.main.currentTrader == __instance && !Util.IsInTradingMenu()) {
                 Body local = Util.GetLocalBody();
-                if ((local == null) || (Vector2.Distance(__instance.transform.position, local.transform.position) >= 6f)) {
+                if (local == null || Vector2.Distance(__instance.transform.position, local.transform.position) >= GameplayRanges.PlayerInteractDistance) {
                     PlayerCamera.main.currentTrader = null;
                 }
             }
-            // push anger steps so clients see the stand-up / warnings before the first swing lands.
+
             int key = __instance.GetInstanceID();
             int stage = StageOf(__instance.hostility, __instance.reputation);
             bool had = HostilityStage.TryGetValue(key, out int prev);
-            if (!had || (prev != stage)) {
+            if (!had || prev != stage) {
                 HostilityStage[key] = stage;
-                if ((stage >= 0) && (!had || (stage > prev))) {
+                if (stage >= 0 && (!had || stage > prev)) {
                     TraderCommit.Publish(__instance);
                 }
             }
@@ -394,8 +320,6 @@ static class TraderScript_OnWillRender_PinLog {
     }
 }
 
-// currentTrader is cleared every LateUpdate, then any nearby trader can write it.
-// these lines are which sync id landed, and which null the menu rebuild is about to hit.
 static class TraderPinLog {
     static string lastId = "";
     static bool lastMenu;
@@ -406,36 +330,30 @@ static class TraderPinLog {
     static bool loggedMiss;
 
     static string SyncText(TraderScript trader) {
-        if (trader == null) {
+        if (trader == null)
             return "0";
-        }
-        SyncInfo si;
-        if (!NetObjectRegistry.TryGetSyncInfo(trader.gameObject, out si) || (si == null)) {
+        if (!NetObjectRegistry.TryGetSyncInfo(trader.gameObject, out SyncInfo si) || si == null) {
             TrackerTrader tt = trader.GetComponent<TrackerTrader>();
-            if ((tt != null) && (tt.si != null)) {
+            if (tt != null && tt.si != null) {
                 si = tt.si;
             }
         }
-        if (si == null) {
-            return "none";
-        }
-        return si.syncId.ToString();
+        return si == null ? "none" : si.syncId.ToString();
     }
 
     internal static void Hold(PlayerCamera cam) {
-        if (!Net.IsRunning || (cam == null) || (cam.tradeMenu == null) || !cam.tradeMenu.activeSelf) {
+        if (!Net.IsRunning || cam == null || cam.tradeMenu == null || !cam.tradeMenu.activeSelf)
             return;
-        }
+
         TraderScript opened = TrackerTrader.currentTrader;
         if (opened == null) {
             if (!loggedMiss) {
                 loggedMiss = true;
-                log.error("[traderpin] hold missed, opened trader is null");
+                ModLog.Error("[traderpin] hold missed, opened trader is null", LogDomain.Trader);
             }
             TrackerTrader.ReleasePinnedTradeMenu(cam);
             return;
         }
-        // 商人敌对/重伤或本地角色倒地/被击飞超过 8 格时立即解除钉住并关闭交易面板，防止锁死角色移动
         if (!TrackerTrader.CanKeepTradeMenuOpen(opened)) {
             TrackerTrader.ReleasePinnedTradeMenu(cam);
             return;
@@ -444,793 +362,128 @@ static class TraderPinLog {
     }
 
     internal static void Sample(string site) {
-        if (!Net.IsRunning || (PlayerCamera.main == null)) {
+        if (!Net.IsRunning || PlayerCamera.main == null)
             return;
-        }
         string id = SyncText(PlayerCamera.main.currentTrader);
         bool menu = Util.IsInTradingMenu();
-        if (haveSample && (id == lastId) && (menu == lastMenu)) {
+        if (haveSample && id == lastId && menu == lastMenu)
             return;
-        }
         haveSample = true;
         lastId = id;
         lastMenu = menu;
-        if (log.verbose) log.l($"[traderpin] {site} sync={id} menu={(menu ? 1 : 0)}");
+        ModLog.Flow(LogDomain.Trader, "TraderPin.Sample", $"{site} sync={id} menu={(menu ? 1 : 0)}");
     }
 
     internal static void AfterWillRender(TraderScript writer) {
-        if (!Net.IsRunning || (PlayerCamera.main == null) || (PlayerCamera.main.currentTrader != writer) || !Util.IsInTradingMenu()) {
+        if (!Net.IsRunning || PlayerCamera.main == null || PlayerCamera.main.currentTrader != writer || !Util.IsInTradingMenu())
             return;
-        }
         string painted = SyncText(writer);
         string opened = SyncText(TrackerTrader.currentTrader);
         if (painted == opened) {
             haveMismatch = false;
             return;
         }
-        if (haveMismatch && (painted == lastPainted) && (opened == lastOpened)) {
+        if (haveMismatch && painted == lastPainted && opened == lastOpened)
             return;
-        }
         haveMismatch = true;
         lastPainted = painted;
         lastOpened = opened;
-        if (log.verbose) log.l($"[traderpin] willrender painted={painted} opened={opened}");
+        ModLog.Flow(LogDomain.Trader, "TraderPin.Mismatch", $"painted={painted} opened={opened}");
     }
 
     internal static void LogRefreshFault(PlayerCamera cam) {
-        if ((cam == null) || (cam.tradeMenu == null) || !cam.tradeMenu.activeSelf) {
+        if (cam == null || cam.tradeMenu == null || !cam.tradeMenu.activeSelf)
             return;
-        }
         TraderScript trader = cam.currentTrader;
         if (trader == null) {
-            log.error("[traderui] refresh currentTrader=null menu=open");
+            ModLog.Error("[traderui] refresh currentTrader=null menu=open", LogDomain.Trader);
             return;
         }
         string id = SyncText(trader);
         if (trader.items == null) {
-            log.error($"[traderui] refresh sync={id} items=null");
+            ModLog.Error($"[traderui] refresh sync={id} items=null", LogDomain.Trader);
             return;
         }
         if (trader.collapsedCategories == null) {
-            log.error($"[traderui] refresh sync={id} collapsedCategories=null items={trader.items.Count}");
+            ModLog.Error($"[traderui] refresh sync={id} collapsedCategories=null items={trader.items.Count}", LogDomain.Trader);
             return;
         }
         if (cam.traderInventory == null) {
-            log.error($"[traderui] refresh sync={id} traderInventory=null items={trader.items.Count}");
+            ModLog.Error($"[traderui] refresh sync={id} traderInventory=null items={trader.items.Count}", LogDomain.Trader);
             return;
         }
         for (int i = 0; i < trader.items.Count; i++) {
-            object boxed = trader.items[i];
-            if (boxed == null) {
-                log.error($"[traderui] refresh sync={id} items[{i}]=null");
+            TraderItem item = trader.items[i];
+            if (item == null) {
+                ModLog.Error($"[traderui] refresh sync={id} items[{i}]=null", LogDomain.Trader);
                 return;
             }
-            TraderItem item = trader.items[i];
             if (string.IsNullOrEmpty(item.id)) {
-                log.error($"[traderui] refresh sync={id} items[{i}] id empty");
+                ModLog.Error($"[traderui] refresh sync={id} items[{i}] id empty", LogDomain.Trader);
                 return;
             }
             GameObject prefab = Resources.Load(item.id) as GameObject;
             if (prefab == null) {
-                log.error($"[traderui] refresh sync={id} items[{i}] id={item.id} prefab=null");
+                ModLog.Error($"[traderui] refresh sync={id} items[{i}] id={item.id} prefab=null", LogDomain.Trader);
                 return;
             }
             SpriteRenderer rend = prefab.GetComponent<SpriteRenderer>();
-            if ((rend == null) || (rend.sprite == null)) {
-                log.error($"[traderui] refresh sync={id} items[{i}] id={item.id} sprite=null");
+            if (rend == null || rend.sprite == null) {
+                ModLog.Error($"[traderui] refresh sync={id} items[{i}] id={item.id} sprite=null", LogDomain.Trader);
                 return;
             }
             if (rend.sprite.texture == null) {
-                log.error($"[traderui] refresh sync={id} items[{i}] id={item.id} texture=null");
+                ModLog.Error($"[traderui] refresh sync={id} items[{i}] id={item.id} texture=null", LogDomain.Trader);
                 return;
             }
             if (Item.GetItem(item.id) == null) {
-                log.error($"[traderui] refresh sync={id} items[{i}] id={item.id} iteminfo=null");
+                ModLog.Error($"[traderui] refresh sync={id} items[{i}] id={item.id} iteminfo=null", LogDomain.Trader);
                 return;
             }
         }
     }
 }
 
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.Swing))]
-static class TraderScript_Swing_MultiplayerPatch {
-    // only the host applies Swing limb damage. clients get slash fx via CLIENT_TraderSwing.
-    private static bool Prefix(TraderScript __instance, out bool __state) {
-        __state = false;
-        if (!Net.IsRunning) {
-            __state = true;
-            return true;
-        }
-        // client get_body always pins the local body, so stock Swing would self-hit then get rolled back.
-        if (Net.IsClient) {
-            return false;
-        }
-        TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
-        tt.bgo.SetNearestBody();
-        // host damages the host copy of whoever is nearest, then ForceHealth.
-        __state = true;
-        return true;
-    }
-    static void Postfix(TraderScript __instance, bool __state) {
-        if (!Net.IsRunning || !Net.IsServer || !__state) {
-            return;
-        }
-        TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
-        Body target = tt.focused_body;
-        if ((target != null) && target.TryGetNetBody(out NetBody body)) {
-            body.OnDamageEvent(new BodyDamageEvent(__instance.build, body, 10));
-            // confirm so a later client health upload can't undo the host limb write.
-            MedicalSync.ForceHealth(body);
-        }
-        Vector2 aim = (target != null) ? (Vector2)target.transform.position : (Vector2)__instance.transform.position;
-        // include the victim. they skipped stock Swing, so this is their slash/sound too.
-        TraderCommit.RelaySwing(__instance, aim);
-        TraderCommit.Publish(__instance);
-    }
-
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
-        return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
-    }
-}
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.AskToMove))]
-public static class TraderScript_AskToMove_MultiplayerPatch {
-    static bool Prefix(TraderScript __instance) {
-        return TraderCommit.LetStock(__instance, TraderCommit.Op.Move);
-    }
-
-    static void Postfix(TraderScript __instance) {
-        if (!Net.IsRunning) return;
-
-        if (Net.IsClient) {
-
-        } else {
-            var tt = __instance.GetOrAddComponent<TrackerTrader>();
-
-            //netObjectRegistry.Server_QueueSync(tt.si);
-        }
-    }
-
-
-
-    [ServerReceiver((byte)NetmsgId.SERVER_TraderAskToMove)]
-    static void Server_TraderAskToMove(knetid terroristid, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        log.l($"TraderAskToMove actually works  {DebugHelp.GetPlayerFullDebugString(terroristid)} ");
-#endif
-
-        reader.Get(out knetid targettrader);
-
-        if (TraderSync.Server_TraderInteractionCheck(terroristid, targettrader, "AskToMove", out ScavPlayer plr, out SyncInfo si, out _)) {
-            TraderCommit.Submit(TraderCommit.Op.Move, plr.body, si);
-            return;
-        }
-        if (NetObjectRegistry.TryGetSyncInfo(targettrader, out si) && (si.trader != null)) {
-            TraderCommit.PublishTo(si.trader, terroristid);
-        }
-    }
-
-
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
-        return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
-    }
-}
-
-
-
-
-
-
-
-
-
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.Threaten))]
-public static class TraderScript_Threaten_MultiplayerPatch {
-    public static bool Prefix(TraderScript __instance) {
-        return TraderCommit.LetStock(__instance, TraderCommit.Op.Threaten);
-    }
-
-    public static void Postfix(TraderScript __instance) {
-
-
-        if (Net.IsRunning) {
-            if (Net.IsClient) {
-
-            } else if (!TraderCommit.Running) {
-                // TraderCommit.Pump 执行完毕后已统一广播快照，队列执行期间跳过重复广播
-                var tt = __instance.GetOrAddComponent<TrackerTrader>();
-
-                tt.Server_AnnounceTraderReputationState();
-            }
-        }
-    }
-
-
-
-    [ServerReceiver((byte)NetmsgId.SERVER_TraderThreaten)]
-    static void Server_TraderThreaten(knetid terroristid, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        log.l($"TraderThreaten actually works  {DebugHelp.GetPlayerFullDebugString(terroristid)} ");
-#endif
-
-        reader.Get(out knetid targettrader);
-
-        if (TraderSync.Server_TraderInteractionCheck(terroristid, targettrader, "Threaten", out ScavPlayer plr, out SyncInfo si, out _)) {
-            TraderCommit.Submit(TraderCommit.Op.Threaten, plr.body, si);
-            return;
-        }
-        if (NetObjectRegistry.TryGetSyncInfo(targettrader, out si) && (si.trader != null)) {
-            TraderCommit.PublishTo(si.trader, terroristid);
-        }
-    }
-
-
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
-        return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
-    }
-}
-
-
-
-
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.TryHug))]
-public static class TraderScript_TryHug_MultiplayerPatch {
-    public static bool Prefix(TraderScript __instance, ref float __state) {
-        __state = __instance.reputation;
-        return TraderCommit.LetStock(__instance, TraderCommit.Op.Hug);
-    }
-
-    public static void Postfix(TraderScript __instance, ref float __state) {
-
-        if (Net.IsRunning) {
-            if (Net.IsClient) {
-
-            } else {
-                var tt = __instance.GetOrAddComponent<TrackerTrader>();
-
-                if (__instance.hostility != 100f && __state != __instance.reputation) {
-                    if (__instance.reputation > __state) {
-
-                    } else {
-
-                        if (!Util.IsBodyLocal(tt.focused_body) && tt.focused_body.TryGetNetPlayer(out var plr)) {
-                            // im host, remind them of ragdoll
-                            plr.Server_RemindPlayersCurrentState(true);
-                        }
-                    }
-                }
-
-                // 避免与外层 TraderCommit.Pump 的收尾快照重复发送全量商品列表
-                if (!TraderCommit.Running)
-                    tt.Server_AnnounceTraderReputationState();
-            }
-        }
-    }
-
-
-
-    [ServerReceiver((byte)NetmsgId.SERVER_TraderTryHug)]
-    static void Server_TraderTryHug(knetid terroristid, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        log.l($"TraderTryHug actually works  {DebugHelp.GetPlayerFullDebugString(terroristid)} ");
-#endif
-
-        reader.Get(out knetid targettrader);
-
-        if (TraderSync.Server_TraderInteractionCheck(terroristid, targettrader, "Hug", out ScavPlayer plr, out SyncInfo si, out _)) {
-            TraderCommit.Submit(TraderCommit.Op.Hug, plr.body, si);
-            return;
-        }
-        if (NetObjectRegistry.TryGetSyncInfo(targettrader, out si) && (si.trader != null)) {
-            TraderCommit.PublishTo(si.trader, terroristid);
-        }
-    }
-
-
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
-        return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
-    }
-}
-
-
-
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.PromptResponse))]
-static class TraderScript_PromptResponse_MultiplayerPatch {
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
-        return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
-    }
-}
-
-[HarmonyPatch(typeof(Talker), nameof(Talker.PromptTraderResponse))]
-static class Talker_PromptTraderResponse_MultiplayerPatch {
-    static bool Prefix(Talker __instance, string textType) {
-        if (!Net.IsRunning) return true;
-
-        if (__instance.body != null && __instance.body.alive) {
-            var phys_in_radius = Physics2D.OverlapCircleAll(__instance.body.transform.position, 20);
-            var only_traders = phys_in_radius.Where(x => x.GetComponent<TraderScript>() != null).Select(x => x.gameObject);
-
-            foreach (var t in only_traders) {
-                var track = t.GetOrAddComponent<TrackerTrader>();
-                track.focused_body = __instance.body;
-
-                track.og.PromptResponse(textType);
-            }
-        }
-        return false;
-    }
-}
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.TryHaggle))]
-public static class TraderScript_TryHaggle_MultiplayerPatch {
-
-    static bool Prefix(TraderScript __instance, ref float __state) {
-        __state = __instance.reputation;
-        return TraderCommit.LetStock(__instance, TraderCommit.Op.Haggle);
-    }
-
-    static void Postfix(TraderScript __instance, ref float __state) {
-        float num = __state - __instance.reputation;
-
-        if (Net.IsRunning && !TraderCommit.Running) {
-            // 仅在非 TraderCommit 串行任务路径下补发快照，消除每次砍价双倍广播 CLIENT_TraderSnapshot
-            var tt = __instance.GetOrAddComponent<TrackerTrader>();
-            tt.Server_AnnounceTraderReputationState();
-        }
-
-    }
-
-    [ServerReceiver((byte)NetmsgId.SERVER_TraderTryHaggle)]
-    static void Server_TraderTryHaggle(knetid terroristid, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG 
-        log.l($"TraderTryHaggle actually works  {DebugHelp.GetPlayerFullDebugString(terroristid)} ");
-#endif
-
-        reader.Get(out knetid targettrader);
-
-        if (TraderSync.Server_TraderInteractionCheck(terroristid, targettrader, "TryHaggle", out ScavPlayer plr, out SyncInfo si, out _)) {
-            TraderCommit.Submit(TraderCommit.Op.Haggle, plr.body, si);
-            return;
-        }
-        if (NetObjectRegistry.TryGetSyncInfo(targettrader, out si) && (si.trader != null)) {
-            TraderCommit.PublishTo(si.trader, terroristid);
-        }
-    }
-
-
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
-        return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
-    }
-}
-
-
-
-
-
-
-
-
-
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.GiveItem))]
-public static class TraderScript_GiveItem_MultiplayerPatch {
-    public static bool Prefix(TraderScript __instance, Item item) {
-        if (!Net.IsRunning || TraderCommit.Running) {
-            return true;
-        }
-        TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
-        if ((tt.si is null) || (tt.si.syncId == 0) || (item == null) || !ItemSync.TryGetSyncInfo(item, out SyncInfo itemsi)) {
-            return false;
-        }
-        if (Net.IsServer) {
-            if ((PlayerCamera.main == null) || (PlayerCamera.main.body == null)) {
-                return false;
-            }
-            TraderCommit.SubmitSell(PlayerCamera.main.body, tt.si, itemsi.syncId);
-            return false;
-        }
-        Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_TraderSellItem, tt.si.syncId, itemsi.syncId, true);
-        return false;
-    }
-
-    [ServerReceiver((byte)NetmsgId.SERVER_TraderSellItem)]
-    private static void Server_TraderSell(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        log.l($"TraderSellItem actually works  {DebugHelp.GetPlayerFullDebugString(clientId)} ");
-#endif
-
-        reader.Get(out knetid targettrader);
-        reader.Get(out knetid solditem);
-
-
-
-        if (TraderSync.Server_TraderInteractionCheck(clientId, targettrader, "SellItem", out ScavPlayer plr, out SyncInfo trader_si, out _)) {
-            TraderCommit.SubmitSell(plr.body, trader_si, solditem);
-            return;
-        }
-        if (NetObjectRegistry.TryGetSyncInfo(targettrader, out trader_si) && (trader_si.trader != null)) {
-            TraderCommit.PublishTo(trader_si.trader, clientId);
-        }
-    }
-
-
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
-        return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.body), MethodType.Getter)]
-static class TraderScript_get_body_MultiplayerPatch {
-
-#if !RELEASE
-    static bool _getter_working_announced = false;
-    static void Prefix() {
-        if (!_getter_working_announced) {
-            _getter_working_announced = true;
-            Plugin.log.LogInfo($"MethodType.Getter  is working: {new StackTrace()}");
-        }
-    }
-#endif 
-
-    static void Postfix(TraderScript __instance, ref Body __result) {
-        if (!Net.IsRunning) {
-            return;
-        }
-        Body actor = TraderCommit.Actor;
-        if (actor != null) {
-            __result = actor;
-            return;
-        }
-        TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
-        BodyGetterOverrider bgo = tt.bgo;
-        // clients keep local body for menu / face / warning lines. host always retargets so
-        // hostility ramp and swings follow any nearby player, not the first body that stuck.
-        if (Net.IsClient) {
-            Body local = Util.GetLocalBody();
-            if (local != null) {
-                bgo.body = local;
-                __result = local;
-                return;
-            }
-        }
-        bgo.SetNearestBody();
-        if ((bgo.body == null) && (PlayerCamera.main != null)) {
-            bgo.body = PlayerCamera.main.body;
-        }
-        __result = bgo.body;
-    }
-}
-
-
-// this is called only from PlayerCamera (by clicking on a button)
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.TryPurchase))]
-internal static class TraderScript_TryPurchase_MultiplayerPatch {
-
-    public static Item TryPurchase_rewritten(TraderScript trader, TraderItem titem, Body buyer) {
-        var is_local = Util.IsBodyLocal(buyer);
-
-        Item did_buy = null;
-        var tracker = trader.GetComponent<TrackerTrader>();
-        var build = trader.GetComponent<BuildingEntity>();
-        if (build.GetHealth() < 200f) {
-            return did_buy;
-        }
-        if (trader.valueGiven >= trader.ItemPrice(titem)) {
-            trader.valueGiven -= trader.ItemPrice(titem);
-            if (trader.ItemPrice(titem) > 0) {
-                if (titem.preference == TraderItemPreference.WantsTrade) {
-                    trader.reputation += 7f;
-                } else if (titem.preference == TraderItemPreference.Indifferent) {
-                    trader.reputation += 4f;
-                }
-            }
-            if (tracker.og.freeAmount > 0) {
-                tracker.og.freeAmount--;
-            } else {
-                trader.talker.Talk(Locale.GetCharacter("traderbuy", trader.character));
-                buyer.happiness += 0.75f;
-                buyer.skills.AddExp(2, 1f);
-            }
-            if (titem.info.HasTag("dressing")) {
-                tracker.og.freeDressing = false;
-            }
-            trader.items.Remove(titem);
-            GameObject gameObject = Utils.Create(titem.id, trader.transform.position, 0f);
-            gameObject.AddComponent<BoughtItem>();
-            if (gameObject.TryGetComponent<AmmoScript>(out var component) && component.itemType == AmmoScript.AmmoItemType.Magazine) {
-                component.rounds = UnityEngine.Random.Range((int)((float)component.maxRounds * 0.5f), component.maxRounds);
-            }
-            buyer.AutoPickUpItem(gameObject.GetComponent<Item>());
-            if (is_local) {
-                PlayerCamera.main.PlayUISound(PlayerCamera.UISoundType.Click);
-            } else {
-                TraderCommit.RelaySound(trader, buyer, "click", trader.transform.position);
-            }
-            did_buy = gameObject.GetComponent<Item>();
-        } else {
-            if (trader.totalValueGiven != MAX_VALUE_GIVEN) {
-                trader.talker.Talk(Locale.GetCharacter("traderbuyfail", trader.character));
-            } else {
-                trader.talker.Talk(Locale.GetCharacter("traderbuyfailmaxvalue", trader.character));
-            }
-            if (is_local) {
-                PlayerCamera.main.PlayUISound(PlayerCamera.UISoundType.Deny);
-            } else {
-                TraderCommit.RelaySound(trader, buyer, "warning", trader.transform.position);
-            }
-            trader.reputation -= 2f;
-        }
-        if ((PlayerCamera.main != null) && (PlayerCamera.main.currentTrader == trader) && Util.IsInTradingMenu()) {
-            PlayerCamera.main.RefreshTraderInventories();
-            PlayerCamera.main.UpdateTradeTexts();
-        }
-        return did_buy;
-    }
-
-
-
-    static bool Prefix(TraderScript __instance, TraderItem item) {
-        if (!Net.IsRunning || TraderCommit.Running) {
-            return true;
-        }
-        if ((PlayerCamera.main == null) || (PlayerCamera.main.currentTrader != __instance) || (item == null)) {
-            return true;
-        }
-        TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
-        if ((tt.si == null) || (tt.si.syncId == 0)) {
-            return false;
-        }
-        byte index = (byte)__instance.items.IndexOf(item);
-        if (Net.IsServer) {
-            TraderCommit.SubmitBuy(PlayerCamera.main.body, tt.si, index, item.id, (ushort)item.value);
-            return false;
-        }
-        var writer = Net.CreateWriter(NetmsgId.SERVER_Trader_TryPurchase);
-        writer.Put(tt.si.syncId);
-        writer.Put((ushort)item.value);
-        writer.Put(index);
-        writer.Put(item.id, true);
-        Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
-        return false;
-    }
-
-    [ServerReceiver((byte)NetmsgId.SERVER_Trader_TryPurchase)]
-    static void Server_Trader_TryPurchase(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-        reader.Get(out knetid trader_syncid);
-        reader.Get(out ushort aleged_value);
-        reader.Get(out byte aleged_index);
-        reader.Get(out string itemId, true);
-
-        if (
-            ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out ScavPlayer plr, out Body buyer) &&
-            buyer != null && buyer.conscious &&
-            NetObjectRegistry.TryGetSyncInfoLive(trader_syncid, out SyncInfo isi) && isi.IsTrader() &&
-            KM.DistanceCheck(buyer, isi, 20)
-        ) {
-            TraderCommit.SubmitBuy(buyer, isi, aleged_index, itemId, aleged_value);
-            return;
-        }
-        if (NetObjectRegistry.TryGetSyncInfo(trader_syncid, out isi) && (isi.trader != null)) {
-            TraderCommit.PublishTo(isi.trader, clientId);
-        }
-    }
-}
-
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.MeetPlayer))]
-public static class TraderScript_MeetPlayer_MultiplayerPatch {
-
-    // its the thing that calculates reputation from first impression
-    public static (float, float, bool) MeetPlayer_CalculateFirstImpression(Body body) {
-        float reputation = 0f;
-        float hostility = 0f;
-        bool freeDressing = false;
-
-        //OG: TraderScript.MeetPlayer  V5t2 THE ENTIRE FUNCTION I COPIED IT HERE
-
-        reputation = UnityEngine.Random.Range(75f, 135f);
-        reputation += body.skills.INTFrom10 * 4f;
-        if (WorldGeneration.world != null)
-            reputation += WorldGeneration.GetRunSettingFloat("traderrepoffset");
-        if (body.talker.impairedSpeech) {
-            reputation -= 20f;
-        }
-        if (body.disfigured) {
-            reputation -= 5f;
-        }
-        if (body.dirtyness > 50f) {
-            reputation -= body.dirtyness * 0.25f;
-        }
-        if (body.HoldingItem(body.handSlot) && body.GetItem(body.handSlot).Stats.HasTag("gun")) {
-            hostility += 50f;
-            reputation -= 20f;
-        }
-        if ((bool)body.mindWipe) {
-            reputation *= 0.7f;
-        }
-        reputation -= (100f - body.brainHealth) * 0.5f;
-        reputation += body.happiness * 0.5f;
-        if (body.hearingLoss > 50f) {
-            reputation -= 20f;
-        }
-        if (body.totalBleedSpeed > 0.001f) {
-            freeDressing = true;
-        }
-        return (reputation, hostility, freeDressing);
-    }
-
-    // host Start leaves startedConvo false with placeholder rep=100. the real first impression
-    // must run once for everyone. not again when the host later walks up and wipes client trades.
-    internal static bool EnsureFirstMeet(TraderScript trader, Body prefer = null) {
-        if ((trader == null) || !Net.IsServer || trader.startedConvo)
-            return false;
-        TrackerTrader tt = trader.GetOrAddComponent<TrackerTrader>();
-        float reputation = 0f;
-        float hostility = 0f;
-        bool freeDressing = false;
-        bool any = false;
-        var plrs = ScavPlayer.GetPlayerBodiesInRadius(trader.transform.position, 16f);
-        foreach (var pb in plrs) {
-            if (pb?.body == null) continue;
-            any = true;
-            var res = MeetPlayer_CalculateFirstImpression(pb.body);
-            reputation = Mathf.Max(res.Item1, reputation);
-            hostility = Mathf.Max(res.Item2, hostility);
-            if (res.Item3) freeDressing = true;
-        }
-        if (!any && prefer != null) {
-            var res = MeetPlayer_CalculateFirstImpression(prefer);
-            reputation = res.Item1;
-            hostility = res.Item2;
-            freeDressing = res.Item3;
-            any = true;
-        }
-        if (!any) {
-            // nobody in range yet. keep Start's 100 until a real body shows up
-            return false;
-        }
-        trader.reputation = reputation;
-        trader.hostility = hostility;
-        tt.og.freeDressing = freeDressing;
-        if (freeDressing && trader.items != null && !trader.items.Exists(x => x != null && x.id == "bandage")) {
-            trader.items.Add(new TraderItem {
-                id = "bandage",
-                preference = TraderItemPreference.Indifferent,
-                value = Item.GetItem("bandage").value
-            });
-            trader.items = trader.items.OrderBy(x => (int)x.preference).ToList();
-        }
-        trader.eyes.sprite = trader.eyeSprites[1];
-        Traverse.Create(trader).Field("sitTime").SetValue(Time.time);
-        trader.startedConvo = true;
-        trader.standTarget = UnityEngine.Random.Range(0.9f, 1f);
-        return true;
-    }
-
-    public static bool Prefix(TraderScript __instance) {
-        if (!Net.IsRunning)
-            return true;
-        // clients never roll first impression. ask the host; provisional convo stops OnWillRender spam.
-        if (Net.IsClient) {
-            __instance.startedConvo = true;
-            __instance.eyes.sprite = __instance.eyeSprites[1];
-            Traverse.Create(__instance).Field("sitTime").SetValue(Time.time);
-            TraderCommit.Ask(__instance.GetOrAddComponent<TrackerTrader>());
-            return false;
-        }
-        // host: one first meet for the room. later approaches must not re-roll over live rep.
-        if (__instance.startedConvo)
-            return false;
-        EnsureFirstMeet(__instance, Util.GetLocalBodyNullable());
-        if (__instance.startedConvo) {
-            __instance.GetOrAddComponent<TrackerTrader>().Server_AnnounceTraderReputationState();
-            return false;
-        }
-        // no body in range yet. let stock no-op path alone; next render retries
-        return false;
-    }
-
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
-        return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
-    }
-}
-
-
-
-
-
-
-
-
+/// <summary>
+/// 商人交互距离与状态校验单例。
+/// </summary>
 public class TraderSync : CasualtiesTogetherSingleton {
-
-
-    // if it returns true it also set the focused body to the guy
-    public static bool Server_TraderInteractionCheck(knetid plrid, knetid traderid, in string interaction_name_for_log, out ScavPlayer plr, out SyncInfo trader_si, out TrackerTrader trader_tracker) {
-
-        if (ScavPlayer.TryGetPlayerAndBodyFromClientId(plrid, out plr, out var terrorist) && terrorist.conscious &&
-            NetObjectRegistry.TryGetSyncInfoLive(traderid, out trader_si) && trader_si.IsTrader() &&
-            //util.AccurateRaycastInteractionCheck(terrorist, si.go.transform.position, false) &&
-            KM.DistanceCheck(terrorist, trader_si, 20)
-        ) {
+    public static bool Server_TraderInteractionCheck(
+        knetid plrid,
+        knetid traderid,
+        in string interaction_name_for_log,
+        out ScavPlayer plr,
+        out SyncInfo trader_si,
+        out TrackerTrader trader_tracker) {
+        if (ScavPlayer.TryGetPlayerAndBodyFromClientId(plrid, out plr, out Body actorBody) &&
+            actorBody.conscious &&
+            NetObjectRegistry.TryGetSyncInfoLive(traderid, out trader_si) &&
+            trader_si.IsTrader() &&
+            KM.DistanceCheck(actorBody, trader_si, GameplayRanges.ServerExchangeToleranceDistance)) {
             trader_tracker = trader_si.trader.GetOrAddComponent<TrackerTrader>();
-
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(trader_tracker.transform.position, $"S: trader {interaction_name_for_log} - {plr.playerName} -> {trader_si}");
-
+            if (DebugHelp._DEV_VISUALISE_NET_EVENTS)
+                DebugHelp.OnNetEvent(trader_tracker.transform.position, $"S: trader {interaction_name_for_log} - {plr.playerName} -> {trader_si}");
             return true;
         }
+
         trader_si = null;
         trader_tracker = null;
-
-
-        log.serverdeny($"trader {trader_si} {interaction_name_for_log} for {plr}");
-
+        log.serverdeny($"trader {traderid} {interaction_name_for_log} for {plr}");
         return false;
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     internal static void SendTraderState(knetid clientId) {
-        if (Net.IsClient || (clientId == default)) {
+        if (Net.IsClient || clientId == default)
             return;
-        }
-        Body body;
-        if (!ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out _, out body) || (body == null)) {
+        if (!ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out _, out Body body) || body == null)
             return;
-        }
+
         Vector2 pos = body.transform.position;
         int sent = 0;
         int skipped = 0;
         foreach (SyncInfo si in NetObjectRegistry.SyncRegistry.Values) {
-            if ((si == null) || (si.go == null) || si.IsDestroyed || !si.IsTrader() || (si.trader == null)) {
+            if (si == null || si.go == null || si.IsDestroyed || !si.IsTrader() || si.trader == null)
                 continue;
-            }
             if (!TraderCommit.InRange(si.trader.transform.position, pos)) {
                 skipped++;
                 continue;
@@ -1238,13 +491,6 @@ public class TraderSync : CasualtiesTogetherSingleton {
             sent++;
             TraderCommit.PublishTo(si.trader, clientId);
         }
-    }
-
-}
-
-[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.DoRest))]
-internal static class TraderScript_DoRest_MultiplayerPatch {
-    private static bool Prefix(TraderScript __instance) {
-        return TraderCommit.LetStock(__instance, TraderCommit.Op.Rest);
+        ModLog.Flow(LogDomain.Trader, "TraderSync.SendTraderState", $"client={clientId} sent={sent} skipped={skipped}");
     }
 }

@@ -1,31 +1,34 @@
-using HarmonyLib;
-using CasualtiesTogetherUtils;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection.Emit;
+using CasualtiesTogetherUtils;
+using HarmonyLib;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using Together.Api;
+using Together.Diagnostics;
 using UnityEngine;
 
 namespace Together;
 
-
-
+/// <summary>
+/// 拦截原版 <see cref="SaveSystem.HasSave"/>，按单人/联机上下文重定向存档检测目录。
+/// </summary>
 [HarmonyPatch(typeof(SaveSystem), nameof(SaveSystem.HasSave))]
 public static class SaveSystem_HasSave_MultiplayerPatch {
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions);
-
+    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) =>
+        SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions);
 
     internal static bool force = false;
+
     private static bool Prefix(ref bool __result) {
         if (force) {
             __result = true;
             force = false;
             return false;
         }
-        // vanilla path is the save.sv the menu reads, so only that file counts.
+        // 原版主菜单仅检测 save.sv，联机目录下包含分玩家子目录时同样视为存在存档
         string path = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
         SavesystemPatch.savedatapathreplacement = path;
         if (path == SavesystemPatch.vanillasavefolder) {
@@ -37,24 +40,22 @@ public static class SaveSystem_HasSave_MultiplayerPatch {
     }
 }
 
-
-
-
-
-
-
-
-
-
+/// <summary>
+/// 拦截原版 <see cref="SaveSystem.SaveGame"/>，由服务端按持久 ID 逐玩家落盘档案、保存联机规则头并写入外部模组侧车分段。
+/// </summary>
 [HarmonyPatch(typeof(SaveSystem), nameof(SaveSystem.SaveGame))]
 public static class SaveSystem_SaveGame_MultiplayerPatch {
     public static WorldGeneration world => WorldGeneration.world;
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions);
+
+    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) =>
+        SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions);
 
     static bool force = false;
     static bool wrote;
 
-    // checkpoint writes one body into a folder that is already selected. the wipe prefix must not run.
+    /// <summary>
+    /// 单玩家检查点直写入口：直接针对已选定目录保存指定躯体，跳过全局联机遍历前缀。
+    /// </summary>
     internal static void WriteForced(Body body) {
         var camera = PlayerCamera.main;
         Body previous = camera != null ? camera.body : null;
@@ -72,52 +73,34 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
 
     static bool Prefix() {
         wrote = false;
-        // a practice world must not overwrite the real mp_save. saveandquit still returns to the menu.
+        // 教学关或地图调试模式禁止覆盖真实 mp_save
         if (SavesystemPatch.PreserveSave && !force)
             return false;
+
         if (!force) {
             SavesystemPatch.savedatapathreplacement = SavesystemPatch.mpsavefolder;
-            var OG_LOCAL_BODY = Util.GetLocalBody();
+            Body originalLocalBody = Util.GetLocalBody();
 
             try {
-
                 if (Multiplayer.IsNetworkActiveAndIsServer()) {
-
                     if (!Directory.Exists(SavesystemPatch.mpsavefolder)) {
                         Directory.CreateDirectory(SavesystemPatch.mpsavefolder);
                     }
 
-                    var midlevel = !ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
+                    bool midlevel = !ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
 
                     try {
-
-                        // because force is false it has to be user clicking on the save button
-                        // make folders for each player name
-                        // and rerun SaveGame function for every player (set the PlayerCamera.main.body or override the body getter)
-                        // and last do the local character but for default  SavesystemPatch.GetPersistentDataPath()  so that the game knows that there is a save 
-
-
                         foreach (var bodyplr in ScavPlayer.BodyToPlayerDict) {
-                            
                             SavesystemPatch.savedatapathreplacement = Path.Combine(SavesystemPatch.mpsavefolder, bodyplr.Value.GetPersistentId());
 
                             try {
                                 try {
-                                    if (!midlevel) { // saved on finish, must respawn characters
-                                        if (!bodyplr.Key.alive) {
-
-                                            if (Multiplayer.rules.CanReviveOnNextLevel()) {
-                                                //bodyplr.Value.Server_RespawnCharacter(PlayerCamera.main.body.transform.position, !Multiplayer.rules.RespawnKeepInventory);
-                                                bodyplr.Value.Server_RespawnCharacter(OG_LOCAL_BODY.transform.position, !midlevel);
-                                            }
-
-                                            
-                                        }
-
+                                    if (!midlevel && !bodyplr.Key.alive && Multiplayer.rules.CanReviveOnNextLevel()) {
+                                        bodyplr.Value.Server_RespawnCharacter(originalLocalBody.transform.position, !midlevel);
                                     }
                                     bodyplr.Value.ResetEntropy();
-                                } catch (Exception e) {
-                                    log.error($"SaveGame_MultiplayerPatch: PREPARING TO SAVE {bodyplr.Value.ToString()}:\n{e.ToString()}");
+                                } catch (Exception ex) {
+                                    ModLog.Exception(LogDomain.World, $"SaveGame.PreparePlayer({bodyplr.Value})", ex);
                                 }
 
                                 if (!Directory.Exists(SavesystemPatch.savedatapathreplacement)) {
@@ -127,96 +110,76 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
                                 force = true;
                                 PlayerCamera.main.body = bodyplr.Key;
                                 SaveSystem.SaveGame();
-                            } catch (Exception e) {
-                                log.error($"SaveGame_MultiplayerPatch: SAVING {bodyplr.Value.ToString()}:\n{e.ToString()}");
+                            } catch (Exception ex) {
+                                ModLog.Exception(LogDomain.World, $"SaveGame.SavePlayer({bodyplr.Value})", ex);
                             }
                         }
 
-                        PlayerCamera.main.body = OG_LOCAL_BODY;
+                        PlayerCamera.main.body = originalLocalBody;
                         SavesystemPatch.savedatapathreplacement = SavesystemPatch.mpsavefolder;
                         force = false;
-
-
-                    }   catch (Exception e) {
-                        log.error($"SaveGame_MultiplayerPatch: SAVING PLAYERS\n{e.ToString()}");
+                    } catch (Exception ex) {
+                        ModLog.Exception(LogDomain.World, "SaveGame.SaveAllPlayers", ex);
                     }
 
-                    
-
-                    // save rules
+                    // 保存联机存档头 mp_rules.json
                     {
-                        var dict = new Dictionary<string, object>();
-
-                        dict["hello"] = "Multiplayer Mod created by Krokosha666";
-                        dict["MPVERSION"] = Plugin.MOD_VERSION;
-                        dict["GAMEVERSION"] = Application.version;
-                        dict["SAVEID"] = WoundView.view.cInfo[2];
-                        dict["LEVEL"] = midlevel;
-                        dict["RULES"] = Multiplayer.rules;
-                        dict["MODIFIER"] = midlevel ? (WorldMP.GetLayerModifier()?.modifierIndex ?? -1) : -1;
-                        dict["PLRPOS"] = ScavPlayer.BodyToPlayerDict.ToDictionary(x => x.Value.GetPersistentId(), x => (x.Key.transform.position.x, x.Key.transform.position.y));
+                        var dict = new Dictionary<string, object> {
+                            ["hello"] = "Multiplayer Mod created by Krokosha666",
+                            ["MPVERSION"] = Plugin.MOD_VERSION,
+                            ["GAMEVERSION"] = Application.version,
+                            ["SAVEID"] = WoundView.view.cInfo[2],
+                            ["LEVEL"] = midlevel,
+                            ["RULES"] = Multiplayer.rules,
+                            ["MODIFIER"] = midlevel ? (WorldMP.GetLayerModifier()?.modifierIndex ?? -1) : -1,
+                            ["PLRPOS"] = ScavPlayer.BodyToPlayerDict.ToDictionary(
+                                x => x.Value.GetPersistentId(),
+                                x => (x.Key.transform.position.x, x.Key.transform.position.y))
+                        };
 #if FULLGAME
                         dict[AchievementBreakSync.SaveHeaderKey] = SteamManager.disableAchievements;
                         dict["PLRCHARS"] = ScavPlayer.BodyToPlayerDict.ToDictionary(
                             x => x.Value.GetPersistentId(),
                             x => x.Key != null ? x.Key.charType : (int)x.Value.selectedCharacter);
 #endif
-
                         string serialized = JsonConvert.SerializeObject(dict, Formatting.Indented);
-#if !RELEASE 
-                        log.l($"SHIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII:\n{serialized}");
-#endif
-                        var rulespath = Path.Combine(SavesystemPatch.mpsavefolder, SavesystemPatch.mpsaveheaderfile);
-
-                        File.WriteAllText(rulespath, serialized);
+                        string rulesPath = Path.Combine(SavesystemPatch.mpsavefolder, SavesystemPatch.mpsaveheaderfile);
+                        File.WriteAllText(rulesPath, serialized);
                     }
 
-
 #if !RELEASE
-                    // saving world data
                     if (midlevel) {
                         try {
-                            // tiles
-                            {
-                                var worldtilesfile = Path.Combine(SavesystemPatch.mpsavefolder, "world_tiles.bin");
-
-                                File.WriteAllBytes(worldtilesfile, SavesystemPatch.SerializeWorldBlocks());
-                            }
-                            // fluids
-                            {
-                                var worldtilesfile = Path.Combine(SavesystemPatch.mpsavefolder, "world_fluid.bin");
-
-                                File.WriteAllBytes(worldtilesfile, SavesystemPatch.SerializeWorldFluids());
-                            }
-
-                            
-
-                            // TODO all objects lol?
-                            log.warn("TODO SAVESYSTEM OBJECTS");
-
-                        } catch (Exception e) {
-                            log.error($"SaveGame_MultiplayerPatch: SAVING WORLD\n{e.ToString()}");
+                            File.WriteAllBytes(
+                                Path.Combine(SavesystemPatch.mpsavefolder, "world_tiles.bin"),
+                                SavesystemPatch.SerializeWorldBlocks());
+                            File.WriteAllBytes(
+                                Path.Combine(SavesystemPatch.mpsavefolder, "world_fluid.bin"),
+                                SavesystemPatch.SerializeWorldFluids());
+                        } catch (Exception ex) {
+                            ModLog.Exception(LogDomain.World, "SaveGame.SaveWorldBinary", ex);
                         }
                     }
 #endif
-
+                    // 联机主存档目录写入完成后，触发 TogetherSaveWorldApi 侧车分段导出与完成事件
+                    TogetherSaveWorldApi.WriteModSaveSections(SavesystemPatch.mpsavefolder);
                 }
-
-            }  catch (Exception e) {
-                log.error($"SaveGame_MultiplayerPatch\n{e.ToString()}");
+            } catch (Exception ex) {
+                ModLog.Exception(LogDomain.World, "SaveGame_MultiplayerPatch.Prefix", ex);
             }
+
             SaveSystem_HasSave_MultiplayerPatch.force = false;
             SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetPersistentDataPathToSave();
             force = false;
-            PlayerCamera.main.body = OG_LOCAL_BODY;
-
+            PlayerCamera.main.body = originalLocalBody;
         }
-        log.l($"SAVING TO FILE: {SavesystemPatch.savedatapathreplacement}");
+
+        ModLog.Flow(LogDomain.World, "SaveGame", $"Saving to {SavesystemPatch.savedatapathreplacement}");
         wrote = true;
         return true;
     }
 
-    // stock save writes the shared recipe table. the payout list is per player, so it rides along after.
+    // 原版存档只写入全局共享配方表，联机按玩家独立记录已合成配方奖励列表
     static void Postfix() {
         if (!wrote || PlayerCamera.main == null || PlayerCamera.main.body == null)
             return;
@@ -226,16 +189,22 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
     }
 }
 
+/// <summary>
+/// 拦截原版 <see cref="SaveSystem.TryLoadGame"/>，恢复联机世界状态、逐玩家档案及外部模组自定义存档段。
+/// </summary>
 [HarmonyPatch(typeof(SaveSystem), nameof(SaveSystem.TryLoadGame))]
 public static class SaveSystem_LoadGame_MultiplayerPatch {
     public static WorldGeneration world => WorldGeneration.world;
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => SavesystemPatch.StripSaveDelete(SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions));
 
+    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) =>
+        SavesystemPatch.StripSaveDelete(SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions));
 
     static bool force = false;
     internal static bool deleteVanillaAfter;
 
-    // late join applies one folder. the multiplayer postfix must not run its lobby walk.
+    /// <summary>
+    /// 中途加入玩家单目录读档入口，跳过全局大厅遍历后缀。
+    /// </summary>
     internal static void ForceLoad() {
         force = true;
         try {
@@ -247,13 +216,12 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
 
     static bool Prefix(ref bool __state) {
         deleteVanillaAfter = false;
-        // map debug and the tutorial leave the files on disk and start from an empty body.
         if (SavesystemPatch.PreserveSave && !force) {
             __state = false;
             SaveSystem.loadedRun = false;
             return false;
         }
-        // continue may lose loadedRun across WaitLoad; sticky flag keeps the lobby walk alive.
+        // 跨场景异步加载期间若 SaveSystem.loadedRun 被清空，依靠粘滞标志维持联机读档链路
         if (!force && SavesystemPatch.PendingLoadMpSave && Net.IsRunning && Net.IsServer) {
             SaveSystem.loadedRun = true;
         }
@@ -263,554 +231,209 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
         }
 
         if (!force) {
-            var OG_LOCAL_BODY = Util.GetLocalBody();
+            Body originalLocalBody = Util.GetLocalBody();
             SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
-            PlayerCamera.main.body = OG_LOCAL_BODY;
-
+            PlayerCamera.main.body = originalLocalBody;
         }
 
-        if (!SaveSystem.loadedRun) { // og wouldnt trigger
+        if (!SaveSystem.loadedRun) {
             return false;
         }
 
-        
-
-        if (!force) {
-            if (Net.IsRunning) {
-                SaveSystem.loadedRun = false;
-                return true;
-            }
+        if (!force && Net.IsRunning) {
+            SaveSystem.loadedRun = false;
+            return true;
         }
 
         deleteVanillaAfter = !Net.IsRunning;
-        log.l($"LOADING SAVE FROM DIRECTORY: {SavesystemPatch.savedatapathreplacement}");
-
+        ModLog.Flow(LogDomain.World, "LoadGame", $"Loading save from {SavesystemPatch.savedatapathreplacement}");
         return true;
     }
+
     static void Postfix(ref bool __state) {
-        // the per-player load. the lobby walk calls back in with force set, and this is the pass that applied the body.
         if (force)
             PlayerCheckpoint.ReadCrafted(SavesystemPatch.savedatapathreplacement);
+
         if (deleteVanillaAfter) {
             deleteVanillaAfter = false;
             try {
-                var vanilla = SavesystemPatch.vanillasavefolder + "\\save.sv";
+                string vanilla = Path.Combine(SavesystemPatch.vanillasavefolder, "save.sv");
                 if (File.Exists(vanilla))
                     File.Delete(vanilla);
-            } catch (Exception e) {
-                log.error($"LoadGame_MultiplayerPatch: solo delete\n{e.ToString()}");
+            } catch (Exception ex) {
+                ModLog.Exception(LogDomain.World, "LoadGame.DeleteSoloSave", ex);
             }
         }
-        if (!force ) {
+
+        if (!force) {
             SaveSystem.loadedRun = __state;
-
             SavesystemPatch.savedatapathreplacement = SavesystemPatch.mpsavefolder;
-            var OG_LOCAL_BODY = Util.GetLocalBody();
-            try {
+            Body originalLocalBody = Util.GetLocalBody();
 
-                var mpsavedir = SavesystemPatch.mpsavefolder;
+            try {
+                string mpsavedir = SavesystemPatch.mpsavefolder;
                 if (Multiplayer.IsNetworkActiveAndIsServer() && SaveSystem.loadedRun && Directory.Exists(mpsavedir)) {
                     Multiplayer.DoMultiplayerStatusMessageLog("Attempting to load a multiplayer save.");
                     if (SavesystemPatch.TryPeekMpWorldState(out var peek) && WorldGeneration.world != null) {
                         SavesystemPatch.ApplyPeekedWorldState(WorldGeneration.world, peek);
-                        log.l($"LoadGame: applied mp_save world peek depth={peek.biomeDepth} midlevel={peek.midlevel} traveled={peek.totalTraveled}");
+                        ModLog.Info($"Applied mp_save world peek: depth={peek.biomeDepth} midlevel={peek.midlevel} traveled={peek.totalTraveled}", LogDomain.World);
                     }
 
                     try {
-                        var rulespath = Path.Combine(mpsavedir, SavesystemPatch.mpsaveheaderfile);
-                        if (File.Exists(rulespath)) {
-
-                           
-
-
-                            bool MIDLEVEL = false;
-                            Dictionary<string, (float, float)> PLRPOS = new Dictionary<string, (float, float)>();
-
-                            // read rules
-                            {
-                                var text = File.ReadAllText(rulespath);
-
-                                var jObject = JObject.Parse(text);
-                                var MPVERSION = (string)jObject.GetValue("MPVERSION");
-                                var GAMEVERSION = (string)jObject.GetValue("GAMEVERSION");
-
-                                var SAVEID = (int)jObject.GetValue("SAVEID");
-                                MIDLEVEL = (bool)jObject.GetValue("LEVEL");
-                                PLRPOS = jObject.GetValue("PLRPOS").ToObject<Dictionary<string, (float, float)>>();
-
-
-                                if (MIDLEVEL) {
-                                    var MODIFIER = (int)jObject.GetValue("MODIFIER");
-                                    if (MODIFIER != -1) {
-                                        world.StartCoroutine(Util._CoroutineCallLambdaWhen(Util.IsWorldGenerated, () => {
-                                            var mod = LayerModifier.availableModifiers[MODIFIER];
-                                            mod.Initialize(world);
-                                            mod.active = true;
-                                        }));
-                                    }
-                                }
-
-
-                                if (MIDLEVEL) {
-                                    log.l($"TODO: LEVEL THING FORGOR WHAT ITS FOR");
-                                }
-
-                                if (MPVERSION != Plugin.MOD_VERSION) {
-                                    log.warn($"LoadGame_MultiplayerPatch: Mismatching mod version! file:{MPVERSION} current: {Plugin.MOD_VERSION}");
-                                }
-                                if (GAMEVERSION != Application.version) {
-                                    log.warn($"LoadGame_MultiplayerPatch: Mismatching game version! file:{GAMEVERSION} current: {Application.version}");
-                                }
-
-                                if (SAVEID != WoundView.view.cInfo[2]) {
-#if !RELEASE
-                                    log.warn("LoadGame_MultiplayerPatch: Save ID doesn't match the save.sv!");
-#endif
-                                }
-
-                                if (jObject.TryGetValue("RULES", out var RULES)) {
-                                    Multiplayer.rules = RULES.ToObject<MultiplayerGameRules>();
-                                }
-#if FULLGAME
-                                if (jObject.TryGetValue(AchievementBreakSync.SaveHeaderKey, out var CHEATED)
-                                    && CHEATED != null && CHEATED.Type != JTokenType.Null
-                                    && CHEATED.Value<bool>()) {
-                                    AchievementBreakSync.ApplyLocal(showAlert: true);
-                                }
-#endif
-                            }
-
-#if !RELEASE
-                            if (MIDLEVEL) {
-                                try {
-                                    {
-                                        var tilespath = Path.Combine(mpsavedir, "world_tiles.bin");
-                                        if (File.Exists(tilespath)) {
-                                            WorldMP.aaaaaaaaaaaaaaaaaaaaaaaaaaa = File.ReadAllBytes(tilespath);
-                                        }
-                                    }
-                                    {
-                                        var fluidspath = Path.Combine(mpsavedir, "world_fluid.bin");
-                                        if (File.Exists(fluidspath)) {
-                                            WorldMP.ccccccccccccccccccccccccccc = File.ReadAllBytes(fluidspath);
-                                        }
-                                    }
-                                    {
-                                        var objectspath = Path.Combine(mpsavedir, "world_objects.bin");
-                                        if (File.Exists(objectspath)) {
-                                            WorldMP.bbbbbbbbbbbbbbbbbbbbbbbbbbb = File.ReadAllBytes(objectspath);
-                                        }
-                                    }
-                                }  catch (Exception e) {
-                                    log.error($"LoadGame_MultiplayerPatch: READING WORLD\n{e.ToString()}");
-                                }
-                            }
-#endif
-
-                            // now read all the players
-
-
-                            try {
-                                SharedMain.CreatePlayerCharacters();
-
-                                foreach (var bodyplr in ScavPlayer.BodyToPlayerDict) {
-                                    var presistentid = bodyplr.Value.GetPersistentId();
-                                    SavesystemPatch.savedatapathreplacement = Path.Combine(mpsavedir, presistentid);
-
-
-#if !RELEASE && false // nah fuck this shit 
-                                    if (MIDLEVEL && PLRPOS.TryGetValue(presistentid, out var plrpos)) {
-                                        bodyplr.Key.transform.position = new Vector2(plrpos.Item1, plrpos.Item2);
-                                        bodyplr.Value.Server_RemindPlayersCurrentState();  
-                                    }
-#endif
-                                    
-                                    if (Directory.Exists(SavesystemPatch.savedatapathreplacement)) {
-                                        try {
-                                            SaveSystem_HasSave_MultiplayerPatch.force = true;
-                                            SaveSystem.loadedRun = true;
-                                            force = true;
-                                            PlayerCamera.main.body = bodyplr.Key;
-#if !RELEASE 
-                                            log.l("PATH BEFORE CALLING TryLoadGame: " + SavesystemPatch.savedatapathreplacement);
-#endif
-                                            SaveSystem.TryLoadGame();
-
-                                            // immidiately register allat
-                                            foreach (var item in bodyplr.Key.GetAllItemsThorough()) {
-                                                if (NetObjectRegistry.ObjectShouldBeSynced(item.gameObject)) {
-                                                    var si = NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(item.gameObject);
-                                                    //if (si != null)  NetObjectRegistry.Server_QueueSync(si);
-                                                    
-                                                }// tp 0,-512 @a
-                                            }
-
-                                            bodyplr.Value.ServerPlayerState.loaded_save = true;
-                                        } catch (Exception e) {
-                                            log.error($"LoadGame_MultiplayerPatch: READING {bodyplr.Value.ToString()}:\nPATH: {SavesystemPatch.savedatapathreplacement}\n{e.ToString()}");
-                                        }
-                                    } else {
-                                        log.warn($"LoadGame_MultiplayerPatch: SAVE FILE NOT FOUND FOR {bodyplr.Value}");
-                                    }
-                                }
-
-                                if (Con.IsConsoleOpen()) { // close it
-                                    ConsoleScript.instance.ToggleActiveState();
-                                }
-
-                            } catch (Exception e) {
-                                log.error($"LoadGame_MultiplayerPatch: READING PLAYERS\n{e.ToString()}");
-                            }
-
-                            SaveSystem.loadedRun = true;
-                            SaveSystem_HasSave_MultiplayerPatch.force = false;
-                            SavesystemPatch.savedatapathreplacement = mpsavedir;
-                            force = false;
-                            PlayerCamera.main.body = OG_LOCAL_BODY;
-                            PlayerCheckpoint.ApplyLocalCraftMarkers();
-
-
-                            try {
-                                foreach (var bodyplr in ScavPlayer.BodyToPlayerDict) {
-                                    if (!bodyplr.Value.ServerPlayerState.loaded_save) {
-                                        var msg = $"LoadGame_MultiplayerPatch: COULD NOT FIND PLAYER TO LOAD: {bodyplr.Value}";
-                                        log.warn(msg);
-                                    }
-                                }
-                            } catch (Exception e) {
-                                log.error($"LoadGame_MultiplayerPatch: TEST\n{e.ToString()}");
-                            }
-
-
-                        } else {
-                            throw new Exception("Multiplayer rules file does not exist.");
+                        string rulesPath = Path.Combine(mpsavedir, SavesystemPatch.mpsaveheaderfile);
+                        if (!File.Exists(rulesPath)) {
+                            throw new FileNotFoundException("Multiplayer rules file does not exist.", rulesPath);
                         }
-                    }
-                    catch (Exception e) {
-                        log.error($"LoadGame_MultiplayerPatch: READING\n{e.ToString()}");
-                    }
 
+                        bool midlevel;
+                        {
+                            string text = File.ReadAllText(rulesPath);
+                            JObject jObject = JObject.Parse(text);
+                            string mpVersion = (string)jObject.GetValue("MPVERSION");
+                            string gameVersion = (string)jObject.GetValue("GAMEVERSION");
+                            int saveId = (int)jObject.GetValue("SAVEID");
+                            midlevel = (bool)jObject.GetValue("LEVEL");
+
+                            if (midlevel) {
+                                int modifier = (int)jObject.GetValue("MODIFIER");
+                                if (modifier != -1) {
+                                    world.StartCoroutine(Util._CoroutineCallLambdaWhen(Util.IsWorldGenerated, () => {
+                                        var mod = LayerModifier.availableModifiers[modifier];
+                                        mod.Initialize(world);
+                                        mod.active = true;
+                                    }));
+                                }
+                            }
+
+                            if (mpVersion != Plugin.MOD_VERSION) {
+                                ModLog.Warning($"LoadGame_MultiplayerPatch: Mismatching mod version! file:{mpVersion} current:{Plugin.MOD_VERSION}", LogDomain.World);
+                            }
+                            if (gameVersion != Application.version) {
+                                ModLog.Warning($"LoadGame_MultiplayerPatch: Mismatching game version! file:{gameVersion} current:{Application.version}", LogDomain.World);
+                            }
+                            if (saveId != WoundView.view.cInfo[2]) {
+                                ModLog.Flow(LogDomain.World, "LoadGame.SaveIdMismatch", $"header={saveId} save.sv={WoundView.view.cInfo[2]}");
+                            }
+
+                            if (jObject.TryGetValue("RULES", out var rulesToken)) {
+                                Multiplayer.rules = rulesToken.ToObject<MultiplayerGameRules>();
+                            }
+#if FULLGAME
+                            if (jObject.TryGetValue(AchievementBreakSync.SaveHeaderKey, out var cheatedToken)
+                                && cheatedToken != null && cheatedToken.Type != JTokenType.Null
+                                && cheatedToken.Value<bool>()) {
+                                AchievementBreakSync.ApplyLocal(showAlert: true);
+                            }
+#endif
+                        }
+
+#if !RELEASE
+                        if (midlevel) {
+                            try {
+                                string tilesPath = Path.Combine(mpsavedir, "world_tiles.bin");
+                                if (File.Exists(tilesPath))
+                                    WorldMP.aaaaaaaaaaaaaaaaaaaaaaaaaaa = File.ReadAllBytes(tilesPath);
+
+                                string fluidsPath = Path.Combine(mpsavedir, "world_fluid.bin");
+                                if (File.Exists(fluidsPath))
+                                    WorldMP.ccccccccccccccccccccccccccc = File.ReadAllBytes(fluidsPath);
+
+                                string objectsPath = Path.Combine(mpsavedir, "world_objects.bin");
+                                if (File.Exists(objectsPath))
+                                    WorldMP.bbbbbbbbbbbbbbbbbbbbbbbbbbb = File.ReadAllBytes(objectsPath);
+                            } catch (Exception ex) {
+                                ModLog.Exception(LogDomain.World, "LoadGame.ReadWorldBinary", ex);
+                            }
+                        }
+#endif
+
+                        try {
+                            SharedMain.CreatePlayerCharacters();
+
+                            foreach (var bodyplr in ScavPlayer.BodyToPlayerDict) {
+                                string persistentId = bodyplr.Value.GetPersistentId();
+                                SavesystemPatch.savedatapathreplacement = Path.Combine(mpsavedir, persistentId);
+
+                                if (Directory.Exists(SavesystemPatch.savedatapathreplacement)) {
+                                    try {
+                                        SaveSystem_HasSave_MultiplayerPatch.force = true;
+                                        SaveSystem.loadedRun = true;
+                                        force = true;
+                                        PlayerCamera.main.body = bodyplr.Key;
+                                        SaveSystem.TryLoadGame();
+
+                                        foreach (Item item in bodyplr.Key.GetAllItemsThorough()) {
+                                            if (NetObjectRegistry.ObjectShouldBeSynced(item.gameObject)) {
+                                                NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(item.gameObject);
+                                            }
+                                        }
+                                        bodyplr.Value.ServerPlayerState.loaded_save = true;
+                                    } catch (Exception ex) {
+                                        ModLog.Exception(LogDomain.World, $"LoadGame.ReadPlayer({bodyplr.Value}, path={SavesystemPatch.savedatapathreplacement})", ex);
+                                    }
+                                } else {
+                                    ModLog.Warning($"LoadGame_MultiplayerPatch: Save file not found for {bodyplr.Value}", LogDomain.World);
+                                }
+                            }
+
+                            if (Con.IsConsoleOpen()) {
+                                ConsoleScript.instance.ToggleActiveState();
+                            }
+                        } catch (Exception ex) {
+                            ModLog.Exception(LogDomain.World, "LoadGame.ReadAllPlayers", ex);
+                        }
+
+                        SaveSystem.loadedRun = true;
+                        SaveSystem_HasSave_MultiplayerPatch.force = false;
+                        SavesystemPatch.savedatapathreplacement = mpsavedir;
+                        force = false;
+                        PlayerCamera.main.body = originalLocalBody;
+                        PlayerCheckpoint.ApplyLocalCraftMarkers();
+
+                        try {
+                            foreach (var bodyplr in ScavPlayer.BodyToPlayerDict) {
+                                if (!bodyplr.Value.ServerPlayerState.loaded_save) {
+                                    ModLog.Warning($"LoadGame_MultiplayerPatch: Could not find player to load: {bodyplr.Value}", LogDomain.World);
+                                }
+                            }
+                        } catch (Exception ex) {
+                            ModLog.Exception(LogDomain.World, "LoadGame.VerifyLoadedPlayers", ex);
+                        }
+
+                        // 联机主存档与各玩家档案恢复完毕后，导入外部模组自定义存档段并触发完成事件
+                        TogetherSaveWorldApi.ReadModSaveSections(mpsavedir);
+                    } catch (Exception ex) {
+                        ModLog.Exception(LogDomain.World, "LoadGame.ReadMpSave", ex);
+                    }
 
                     SaveSystem.loadedRun = true;
                     SavesystemPatch.PendingLoadMpSave = false;
                     SaveSystem_HasSave_MultiplayerPatch.force = false;
                     SavesystemPatch.savedatapathreplacement = SavesystemPatch.vanillasavefolder;
                     force = false;
-                    PlayerCamera.main.body = OG_LOCAL_BODY;
+                    PlayerCamera.main.body = originalLocalBody;
                 }
-            } catch (Exception e) {
-                log.error($"LoadGame_MultiplayerPatch\n{e.ToString()}");
+            } catch (Exception ex) {
+                ModLog.Exception(LogDomain.World, "LoadGame_MultiplayerPatch.Postfix", ex);
             }
+
             SaveSystem_HasSave_MultiplayerPatch.force = false;
             SavesystemPatch.savedatapathreplacement = SavesystemPatch.vanillasavefolder;
             force = false;
-            PlayerCamera.main.body = OG_LOCAL_BODY;
+            PlayerCamera.main.body = originalLocalBody;
         }
     }
 }
 
-
+/// <summary>
+/// 拦截主菜单 <see cref="PreRunScript.Start"/>，同步更新存档目录替换路径以刷新继续游戏按钮状态。
+/// </summary>
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.Start))]
 public static class PreRunScript_Start_MultiplayerPatch {
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions);
+    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) =>
+        SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions);
 
     static void Prefix() {
         SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
     }
 }
-
-
-
-
-public static class SavesystemPatch {
-    public static string savedatapathreplacement = "";
-    // set for map debug and the tutorial. those sessions neither read nor write mp_save.
-    internal static bool PreserveSave;
-    // continue/LoadRun: sticky across WaitLoad→scene load so Start still treats this as a loaded run
-    // even if something clears SaveSystem.loadedRun before TryLoadGame.
-    internal static bool PendingLoadMpSave;
-    const string _mpsavefolder_name = "mp_save";
-    public static string mpsavefolder => Path.Combine(Application.persistentDataPath, _mpsavefolder_name);
-    public static string vanillasavefolder => Application.persistentDataPath;
-    public const string mpsaveheaderfile = "mp_rules.json";
-
-    internal struct MpWorldPeek {
-        public int biomeDepth;
-        public int totalTraveled;
-        public float lootRarity;
-        public float trapRarity;
-        public bool midlevel;
-        public bool ok;
-    }
-
-    // mid-layer checkpoints store raw biomeDepth; layer-transition / vanilla SaveGame stores depth+1.
-    internal static bool TryPeekMpWorldState(out MpWorldPeek peek) {
-        peek = default;
-        try {
-            bool midlevel = false;
-            var rulespath = Path.Combine(mpsavefolder, mpsaveheaderfile);
-            if (File.Exists(rulespath)) {
-                var rules = JObject.Parse(File.ReadAllText(rulespath));
-                if (rules.TryGetValue("LEVEL", out var lvl) && lvl != null && lvl.Type != JTokenType.Null)
-                    midlevel = lvl.Value<bool>();
-            }
-
-            string savePath = Path.Combine(mpsavefolder, "save.sv");
-            if (!File.Exists(savePath) && Directory.Exists(mpsavefolder)) {
-                foreach (var dir in Directory.GetDirectories(mpsavefolder)) {
-                    var candidate = Path.Combine(dir, "save.sv");
-                    if (File.Exists(candidate)) {
-                        savePath = candidate;
-                        break;
-                    }
-                }
-            }
-            if (!File.Exists(savePath))
-                return false;
-
-            var root = JObject.Parse(SaveSystem.Unzip(File.ReadAllBytes(savePath)));
-            if (root["biome"] == null)
-                return false;
-
-            int stored = (int)root["biome"];
-            // mid-layer: raw depth. otherwise vanilla depth+1 → convert back.
-            int depth = midlevel ? stored : Math.Max(0, stored - 1);
-            if (WorldGeneration.world != null && WorldGeneration.world.amountOfLayers > 0)
-                depth = Mathf.Clamp(depth, 0, WorldGeneration.world.amountOfLayers - 1);
-
-            peek.biomeDepth = depth;
-            peek.midlevel = midlevel;
-            peek.totalTraveled = root["totalTraveled"] != null ? (int)root["totalTraveled"] : 0;
-            peek.lootRarity = root["lootRarity"] != null ? (float)root["lootRarity"] : 1f;
-            peek.trapRarity = root["trapRarity"] != null ? (float)root["trapRarity"] : 1f;
-            peek.ok = true;
-            return true;
-        } catch (Exception e) {
-            log.warn($"TryPeekMpWorldState: {e.Message}");
-            return false;
-        }
-    }
-
-    internal static void ApplyPeekedWorldState(WorldGeneration world, in MpWorldPeek peek) {
-        if (world == null || !peek.ok)
-            return;
-        world.debugStartDepth = peek.biomeDepth;
-        world.biomeDepth = peek.biomeDepth;
-        if (peek.totalTraveled > 0)
-            world.totalTraveled = peek.totalTraveled;
-        if (peek.lootRarity > 0f)
-            world.lootRarityMultiplier = peek.lootRarity;
-        if (peek.trapRarity > 0f)
-            world.trapRarityMultiplier = peek.trapRarity;
-    }
-
-    public static string ReplacementFor_Application_persistentDataPath() {
-        return savedatapathreplacement;
-    }
-
-    public static bool HasAnySaveFile() {
-        return HasVanillaSaveFile() || HasMultiplayerSaveFile();
-    }
-    public static bool HasOnlyVanillaSaveFile() {
-        return HasVanillaSaveFile() && !HasMultiplayerSaveFile();
-    }
-    public static bool HasVanillaSaveFile() {
-        return File.Exists(vanillasavefolder + "\\save.sv");
-    }
-    public static bool HasMultiplayerSaveFile() {
-        if (File.Exists(mpsavefolder + "\\save.sv"))
-            return true;
-        if (!Directory.Exists(mpsavefolder))
-            return false;
-        foreach (var dir in Directory.GetDirectories(mpsavefolder)) {
-            if (File.Exists(Path.Combine(dir, "save.sv")))
-                return true;
-        }
-        return false;
-    }
-
-    public static void UpdatePersistentDataPathCuzMultiplayer() {
-
-        SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
-
-        if (Util.IsInMainMenu()) {
-            var prs = PreRunScript.instance;
-            if (prs != null) {
-                prs.loadButton.interactable = SaveSystem.HasSave();
-            }
-        }
-    }
-
-    internal static string GetTheOnePersistentDataPathWithSaveFile() {
-
-        if (Net.IsRunning && HasMultiplayerSaveFile()) {
-            return mpsavefolder;
-        } else {
-            return Application.persistentDataPath;
-        }
-    }
-    internal static string GetPersistentDataPathToSave() {
-
-        if (Net.IsRunning) {
-            return mpsavefolder;
-        } else {
-            return Application.persistentDataPath;
-        }
-    }
-    internal static void DeleteMPSave() {
-        PendingLoadMpSave = false;
-        if (Directory.Exists(mpsavefolder)) {
-            try {
-                Directory.Delete(mpsavefolder, true);
-            } catch (Exception e) {
-                log.error($"LoadGame_MultiplayerPatch: DELETING SAVE\n{e.ToString()}");
-            }
-        }
-    }
-
-
-    internal static IEnumerable<CodeInstruction> TranspilerToReplaceTheApplicationPath(IEnumerable<CodeInstruction> instructions) {
-
-        var codes = new List<CodeInstruction>(instructions);
-
-        for (int i = 0; i < instructions.Count(); i++) {
-            var code = codes[i];
-            if (code.ToString().Contains("get_persistentDataPath")) {
-#if !RELEASE && false
-                log.warn("SAVESYSTEM TRANSPILER: replcaed Application.persistentDataPath " + i.ToString());
-#endif
-                //code.opcode = ;
-                //code.operand = AccessTools.Field(typeof(SavesystemPatch), nameof(SavesystemPatch.savedatapathreplacement));
-
-                code.operand = AccessTools.Method(typeof(SavesystemPatch), nameof(SavesystemPatch.ReplacementFor_Application_persistentDataPath));
-            }
-        }
-
-        return instructions;
-    }
-
-    internal static IEnumerable<CodeInstruction> StripSaveDelete(IEnumerable<CodeInstruction> instructions) {
-        var delete = AccessTools.Method(typeof(File), nameof(File.Delete), new Type[] { typeof(string) });
-        var codes = new List<CodeInstruction>(instructions);
-        for (int i = 0; i < codes.Count; i++) {
-            if (delete != null && codes[i].Calls(delete))
-                codes[i] = new CodeInstruction(OpCodes.Pop);
-        }
-        return codes;
-    }
-
-
-
-    #region SERIALIZERS
-
-    public static WorldGeneration world => WorldGeneration.world;
-    //public static Traverse worldBlocks_field => Traverse.Create(WorldGeneration.world).Field("worldBlocks");
-    //public static ushort[,] worldBlocks => (ushort[,])worldBlocks_field.GetValue();
-    public static ushort[,] worldBlocks => WorldGeneration.world.worldBlocks;
-    public static byte[,] fluid => FluidManager.main.fluid;
-
-
-    public static byte[] SerializeWorldBlocks() {
-        var byteblocks = new byte[world.width * world.height];
-
-        var blocks = worldBlocks;
-        // flatten the 2d array
-        // and convert to bytes cuz the block ids are far from going above 255
-
-
-        for (int y = 0; y < world.height; y++) {
-            for (int x = 0; x < world.width; x++) {
-                byteblocks[y * world.height + x] = (byte)blocks[x, y];
-            }
-        }
-
-        byteblocks = Util.Compress(byteblocks);
-
-        //var base64 = Convert.ToBase64String(byteblocks);
-        //
-        //Plugin.log.LogInfo($"TEMP DEV: Compressed map data size: {base64.Length}\n#################################\n{base64}\n#################################");
-        //
-        //return base64;
-        return byteblocks;
-    }
-
-
-    public static void DeserializeWorldBlocks(in byte[] mapdata) {
-        try {
-            var mapblocks = Util.Decompress(mapdata);
-
-            var blocks = worldBlocks;
-            for (int y = 0; y < world.height; y++) {
-                for (int x = 0; x < world.width; x++) {
-                    blocks[x, y] = (ushort)mapblocks[y * world.height + x];
-                }
-            }
-
-            world.UpdateWorld();
-        } catch (Exception e) {
-            log.error($"Failed to load map blocks: {e}");
-        }
-    }
-
-
-
-    public static byte[] SerializeWorldFluids() {
-        var bytefluids = new byte[world.width * world.height];
-
-        var f = fluid;
-        // flatten the 2d array
-        // and convert to bytes cuz the block ids are far from going above 255
-
-
-        for (int y = 0; y < world.height; y++) {
-            for (int x = 0; x < world.width; x++) {
-                bytefluids[y * world.height + x] = (byte)f[x, y];
-            }
-        }
-
-        bytefluids = Util.Compress(bytefluids);
-
-        return bytefluids;
-    }
-
-
-    public static void DeserializeWorldFluids(in byte[] mapdata) {
-        try {
-            var mapfluidss = Util.Decompress(mapdata);
-
-            var f = fluid;
-            for (int y = 0; y < world.height; y++) {
-                for (int x = 0; x < world.width; x++) {
-                    f[x, y] = (byte)mapfluidss[y * world.height + x];
-                }
-            }
-
-            world.UpdateWorld();
-        } catch (Exception e) {
-            log.error($"Failed to load map fluid: {e}");
-        }
-    }
-
-
-
-#if !RELEASE
-    public static byte[] SerializeWorldObjects() {
-
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream);
-
-
-
-        return new byte[0];
-    }
-#endif
-
-
-    #endregion
-
-
-
-
-}
-
-

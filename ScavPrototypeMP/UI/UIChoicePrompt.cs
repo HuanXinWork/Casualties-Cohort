@@ -1,5 +1,4 @@
 using CasualtiesTogetherUtils;
-using HarmonyLib;
 using KrokV5Optimization;
 using LiteNetLib;
 using LiteNetLib.Utils;
@@ -8,50 +7,36 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using TMPro;
-using Together;
+using Together.Diagnostics;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace Together;
 
-
-
+/// <summary>
+/// 队列式滑动选择提示框系统（喂食/吸血同意确认、投票弹窗等），支持防误触悬停减速滑入。
+/// </summary>
 public class UIChoicePrompt : CasualtiesTogetherSingleton {
+    public static float ScreenHeight => Screen.height;
+    public static float ScreenWidth => Screen.width;
 
-    public static float ScreenHeight {
-        get {
-            if (UIBullshit.USE_NEW_UI) {
+    public static UIChoicePrompt instance { get; private set; }
 
-            }
-            return Screen.height;
-        }
-    }
-    public static float ScreenWidth {
-        get {
-            if (UIBullshit.USE_NEW_UI) {
-
-            }
-            return Screen.width;
-        }
+    public UIChoicePrompt() {
+        instance = this;
     }
 
     public static void ClientDoNetPrompt(uint key, string promptid, string title, string text) {
         Lang.MsgTryParse(ref title);
         Lang.MsgTryParse(ref text);
 
-#if TESTING
-        log.l($"ClientDoNetPrompt:\n{title}\n{text}");
-#endif
-
-        // dune bite: if we are KO/asleep, never show Yes/No - auto-accept (host may have thought we were still conscious)
+        // 沙丘鼠吸血请求：若本地角色已昏迷或入睡无法主动确认，直接自动回发同意以契合生理状态
         if (promptid == "DUNE_BITE") {
             Body local = PlayerCamera.main != null ? PlayerCamera.main.body : null;
             if (local == null && ScavPlayer.LocalPlayer != null) {
                 local = ScavPlayer.LocalPlayer.body;
             }
             if (local != null && NetBody.DuneBiteSessionCannotConsent(local)) {
-                var auto = Net.CreateWriter(NetmsgId.SERVER_CustomPromptAnswer);
+                NetDataWriter auto = Net.CreateWriter(NetmsgId.SERVER_CustomPromptAnswer);
                 auto.Put(key);
                 auto.Put(promptid);
                 auto.Put((byte)0);
@@ -63,28 +48,27 @@ public class UIChoicePrompt : CasualtiesTogetherSingleton {
         string yes = promptid == "DUNE_BITE" ? Lang.Get("yes") : Lang.Get("accept");
         string no = promptid == "DUNE_BITE" ? Lang.Get("no") : Lang.Get("decline");
 
-        UIChoicePrompt.ShowPrompt(new UIChoicePrompt.Prompt {
+        ShowPrompt(new Prompt {
             text = text,
             name = title,
-            //defaultcanignore = true,
             timeout = 12,
             pos = new Vector2(0.5f, 0.98f),
             size = new Vector2(0.43f, 0.18f),
-            choices = new UIChoicePrompt.Prompt.PromptChoice[] {
-                new UIChoicePrompt.Prompt.PromptChoice {
+            choices = new[] {
+                new Prompt.PromptChoice {
                     text = yes,
                     action = () => {
-                        var writer = Net.CreateWriter(NetmsgId.SERVER_CustomPromptAnswer);
+                        NetDataWriter writer = Net.CreateWriter(NetmsgId.SERVER_CustomPromptAnswer);
                         writer.Put(key);
                         writer.Put(promptid);
                         writer.Put((byte)0);
                         Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
                     }
                 },
-                new UIChoicePrompt.Prompt.PromptChoice {
+                new Prompt.PromptChoice {
                     text = no,
                     action = () => {
-                        var writer = Net.CreateWriter(NetmsgId.SERVER_CustomPromptAnswer);
+                        NetDataWriter writer = Net.CreateWriter(NetmsgId.SERVER_CustomPromptAnswer);
                         writer.Put(key);
                         writer.Put(promptid);
                         writer.Put((byte)1);
@@ -95,28 +79,13 @@ public class UIChoicePrompt : CasualtiesTogetherSingleton {
         });
     }
 
-
-
-
-
-
-
-
-
-
-
-
-    public static UIChoicePrompt instance { get; private set; }
-    public UIChoicePrompt() {
-        instance = this;
-    }
-
     public class Prompt {
         public class PromptChoice {
             public Dictionary<string, object> data;
             public string text;
             public Action action;
         }
+
         public readonly Dictionary<string, object> data = new();
         public string name;
         public string text;
@@ -124,30 +93,26 @@ public class UIChoicePrompt : CasualtiesTogetherSingleton {
         public Texture2D texture;
         public Vector2 pos = new Vector2(0.2f, 0f);
         public Vector2 size = new Vector2(0.35f, 0.16f);
-        public bool immidiate; // if true it doesnt wait for mouse to move to prevent accidental click
+        public bool immidiate;
         public int defaultchoice = -1;
         public bool defaultcanignore;
-        public byte chosenchoice = 0;
+        public byte chosenchoice;
         public bool chosenignore;
-        public PromptChoice[] choices = null;
+        public PromptChoice[] choices;
 
         public void CalculateRectTransform(RectTransform rt, bool use_progress) {
-            var realPromptSize = size * UIManager.ReferenceResolution;
+            Vector2 realPromptSize = size * UIManager.ReferenceResolution;
+            Vector2 invertedPos = new Vector2(pos.x, 1f - pos.y);
 
-            var pos = this.pos;
-            pos = new Vector2(pos.x, 1 - pos.y);
-
-            // testprompt aaa bbb 1 0
-
-            rt.pivot = pos;
-            var realPos = pos;
+            rt.pivot = invertedPos;
+            Vector2 realPos = invertedPos;
             if (use_progress) {
-                if (pos.y < 0.5f) {
-                    rt.pivot = Vector2.LerpUnclamped(new Vector2(rt.pivot.x, 1), rt.pivot, prompt_show_progress);
-                    realPos = Vector2.LerpUnclamped(new Vector2(realPos.x, 0), realPos, prompt_show_progress);
+                if (invertedPos.y < 0.5f) {
+                    rt.pivot = Vector2.LerpUnclamped(new Vector2(rt.pivot.x, 1f), rt.pivot, prompt_show_progress);
+                    realPos = Vector2.LerpUnclamped(new Vector2(realPos.x, 0f), realPos, prompt_show_progress);
                 } else {
-                    rt.pivot = Vector2.LerpUnclamped(new Vector2(rt.pivot.x, 0), rt.pivot, prompt_show_progress);
-                    realPos = Vector2.LerpUnclamped(new Vector2(realPos.x, 1), realPos, prompt_show_progress);
+                    rt.pivot = Vector2.LerpUnclamped(new Vector2(rt.pivot.x, 0f), rt.pivot, prompt_show_progress);
+                    realPos = Vector2.LerpUnclamped(new Vector2(realPos.x, 1f), realPos, prompt_show_progress);
                 }
             }
 
@@ -156,116 +121,99 @@ public class UIChoicePrompt : CasualtiesTogetherSingleton {
             rt.SetSizeAndPos(realPromptSize, Vector2.one * 0.5f);
         }
 
-
         public Rect CalculateRect(bool use_progress) {
+            float shortSide = Mathf.Min(ScreenHeight, ScreenWidth);
+            float areaWidth = shortSide * size.x;
+            float areaHeight = shortSide * size.y;
 
-            var sss = Mathf.Min(ScreenHeight, ScreenWidth);
-
-            var areawidth = sss * size.x;
-            var areaheight = sss * size.y;
-
-            var real_pos_X = (ScreenWidth - areawidth) * pos.x;
-            var real_pos_Y = (ScreenHeight - areaheight) * pos.y;
+            float realPosX = (ScreenWidth - areaWidth) * pos.x;
+            float realPosY = (ScreenHeight - areaHeight) * pos.y;
             if (use_progress) {
-                if (pos.y < 0.5f) {
-                    real_pos_Y = Mathf.Lerp(-areaheight, real_pos_Y, prompt_show_progress);
-                } else {
-                    real_pos_Y = Mathf.Lerp(ScreenHeight, real_pos_Y, prompt_show_progress);
-                }
+                realPosY = pos.y < 0.5f
+                    ? Mathf.Lerp(-areaHeight, realPosY, prompt_show_progress)
+                    : Mathf.Lerp(ScreenHeight, realPosY, prompt_show_progress);
             }
 
-            Rect rect = new Rect(real_pos_X, real_pos_Y, areawidth, areaheight);
-
-            return rect;
+            return new Rect(realPosX, realPosY, areaWidth, areaHeight);
         }
     }
 
-    Queue<Prompt> prompt_queue = new();
-    public static float prompt_show_progress = 0;
-    public static bool mouse_is_near_area = false;
+    private readonly Queue<Prompt> prompt_queue = new();
+    public static float prompt_show_progress;
+    public static bool mouse_is_near_area;
 
     public static void ShowPrompt(Prompt prompt) {
-        instance.prompt_queue.Enqueue(prompt);
+        if (instance != null && prompt != null) {
+            instance.prompt_queue.Enqueue(prompt);
+        }
     }
 
-    void Update() {
+    private void Update() {
         mouse_is_near_area = false;
         if (prompt_queue.Count > 0) {
-            var firstprompt = prompt_queue.Peek();
-            if (firstprompt.timeout <= 0) {
+            Prompt firstPrompt = prompt_queue.Peek();
+            if (firstPrompt.timeout <= 0) {
                 prompt_show_progress = Mathf.MoveTowards(prompt_show_progress, 0, Time.deltaTime * 4f);
-
                 if (prompt_show_progress == 0) {
                     prompt_queue.Dequeue();
                 }
-            } else {
-                if (prompt_show_progress < 1) {
-                    if (firstprompt.immidiate) {
-                        prompt_show_progress = 1;
-                    } else {
-
-                        var rrr = firstprompt.CalculateRect(false).ShrinkBorder(-20 * UIMainMenu.GetMenuUIScale());
-                        mouse_is_near_area = UIBullshit.IsCursorInGUIRect(rrr);
-
-                        var speed = 3f;
-
-                        if (!mouse_is_near_area || prompt_show_progress == 0) {
-                            speed = 3f;
-                        } else {
-                            speed = 0.2f;
-                        }
-                        prompt_show_progress = Mathf.MoveTowards(prompt_show_progress, 1, Time.deltaTime * speed);
-
-                        if (prompt_show_progress >= 1) {
-                            Util.PlayUISound(PlayerCamera.UISoundType.Click);
-                        }
-                    }
+            } else if (prompt_show_progress < 1) {
+                if (firstPrompt.immidiate) {
+                    prompt_show_progress = 1;
                 } else {
-                    if (firstprompt.timeout > 0) {
-                        firstprompt.timeout -= Time.deltaTime;
-                        if (firstprompt.timeout <= 0) {
-                            if (firstprompt.defaultcanignore) {
-                                firstprompt.chosenignore = true;
-                            } else {
-                                PromptUse(firstprompt, firstprompt.defaultchoice);
-                            }
-                            Util.PlayUISound(PlayerCamera.UISoundType.Close);
-                        }
+                    Rect guardRect = firstPrompt.CalculateRect(false).ShrinkBorder(-20 * UIMainMenu.GetMenuUIScale());
+                    mouse_is_near_area = UIBullshit.IsCursorInGUIRect(guardRect);
+
+                    float speed = (!mouse_is_near_area || prompt_show_progress == 0) ? 3f : 0.2f;
+                    prompt_show_progress = Mathf.MoveTowards(prompt_show_progress, 1, Time.deltaTime * speed);
+
+                    if (prompt_show_progress >= 1) {
+                        Util.PlayUISound(PlayerCamera.UISoundType.Click);
                     }
+                }
+            } else if (firstPrompt.timeout > 0) {
+                firstPrompt.timeout -= Time.deltaTime;
+                if (firstPrompt.timeout <= 0) {
+                    if (firstPrompt.defaultcanignore) {
+                        firstPrompt.chosenignore = true;
+                    } else {
+                        PromptUse(firstPrompt, firstPrompt.defaultchoice);
+                    }
+                    Util.PlayUISound(PlayerCamera.UISoundType.Close);
                 }
             }
         } else {
             prompt_show_progress = 0;
         }
-
     }
 
     public static void PromptUse(Prompt prompt, int choice) {
-        var ch = (byte)choice;
-
-        if (prompt.choices != null) {
-            if (ch >= prompt.choices.Count()) {
-                ch = (byte)(prompt.choices.Count() - 1);
+        byte ch = (byte)Mathf.Max(0, choice);
+        if (prompt.choices != null && prompt.choices.Length > 0) {
+            if (ch >= prompt.choices.Length) {
+                ch = (byte)(prompt.choices.Length - 1);
             }
-
             SafeActionInvoke(prompt.choices[ch].action);
         }
 
         prompt.chosenchoice = ch;
         prompt.timeout = 0;
     }
+
     public static void SafeActionInvoke(Action action) {
+        if (action == null) {
+            return;
+        }
         try {
             action.Invoke();
-        } catch (Exception e) {
-            log.error(e);
+        } catch (Exception ex) {
+            ModLog.Exception(LogDomain.UI, "UIChoicePrompt.SafeActionInvoke", ex);
         }
     }
 
-
     public static IEnumerator DoPromptCoroutine(Prompt prompt) {
         ShowPrompt(prompt);
-        while (instance.prompt_queue.Contains(prompt)) {
+        while (instance != null && instance.prompt_queue.Contains(prompt)) {
             yield return null;
         }
     }
@@ -274,214 +222,180 @@ public class UIChoicePrompt : CasualtiesTogetherSingleton {
         return Util.StartCoroutineAsync(DoPromptCoroutine(prompt));
     }
 
-
     internal void _GUI_RenderUIChoicePrompt() {
         FixChoicePrompt.Begin();
         try {
-
-            if (prompt_show_progress != 0) {
-                if (prompt_queue.Count > 0) {
-                    var ogcolor = GUI.color;
-                    var ogwrap = GUI.skin.label.wordWrap;
-                    var ogrich = GUI.skin.label.richText;
-                    var ogalignment = GUI.skin.label.alignment;
-
-                    var firstprompt = prompt_queue.Peek();
-                    if (prompt_show_progress < 1) {
-                        if (mouse_is_near_area) {
-                            var aaaaa = Mathf.Sin(Time.realtimeSinceStartup * 6f);
-                            GUI.color = new Color(aaaaa, aaaaa, aaaaa, 0.7f + aaaaa * 0.3f);
-                            var shadowrect = firstprompt.CalculateRect(false);
-                            GUI.Label(shadowrect, "", GUI.skin.box);
-
-                            GUI.color = ogcolor;
-
-                            GUI.skin.label.alignment = TextAnchor.LowerCenter;
-                            GUI.Label(shadowrect, Lang.Get("movemouse"));
-
-                            UIBullshit._GUI_SetTooltip(Lang.Get("movemouse"), "");
-                        }
-                    }
-                    GUI.skin.label.alignment = TextAnchor.UpperCenter;
-
-                    var rect = firstprompt.CalculateRect(true).ShrinkBorder(3 * UIMainMenu.GetMenuUIScale());
-                    //GUI.Label(rect, "", GUI.skin.box);
-
-                    UIBullshit.CheckCursorOverlap(rect);
-                    GUILayout.BeginArea(rect, "", GUI.skin.box);
-
-                    GUI.skin.label.richText = true;
-                    UIBullshit._GUI_BiggerLabel(firstprompt.name, 1.4f);
-
-                    GUI.skin.label.wordWrap = true;
-                    GUI.skin.label.richText = true;
-
-                    GUILayout.Label(firstprompt.text);
-                    GUI.skin.label.wordWrap = ogwrap;
-
-
-                    if (firstprompt.timeout > 0 && firstprompt.choices != null) {
-                        GUILayout.BeginVertical();
-                        GUILayout.FlexibleSpace();
-                        GUILayout.EndVertical();
-
-                        var og_enabled = GUI.enabled;
-                        if (prompt_show_progress < 1 && mouse_is_near_area) {
-                            GUI.enabled = false;
-                            var aaaaa = Mathf.Sin(Time.realtimeSinceStartup * 6f);
-                            GUI.color = new Color(1, 1, 1, 0.2f + aaaaa * 0.15f);
-                        }
-
-                        GUILayout.BeginHorizontal();
-                        GUILayout.FlexibleSpace();
-                        for (int i = 0; i < firstprompt.choices.Length; i++) {
-                            var item = firstprompt.choices[i];
-                            if (GUILayout.Button(item.text)) {
-                                PromptUse(firstprompt, i);
-                                Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
-                            }
-                            GUILayout.FlexibleSpace();
-                        }
-                        GUILayout.EndHorizontal();
-
-                        GUI.enabled = og_enabled;
-                        GUI.color = ogcolor;
-                    }
-                    GUILayout.EndArea();
-                    GUI.skin.label.alignment = ogalignment;
-                    GUI.skin.label.richText = ogrich;
-                }
+            if (prompt_show_progress == 0 || prompt_queue.Count == 0) {
+                return;
             }
 
+            Color ogColor = GUI.color;
+            bool ogWrap = GUI.skin.label.wordWrap;
+            bool ogRich = GUI.skin.label.richText;
+            TextAnchor ogAlignment = GUI.skin.label.alignment;
+
+            Prompt firstPrompt = prompt_queue.Peek();
+            if (prompt_show_progress < 1 && mouse_is_near_area) {
+                float pulse = Mathf.Sin(Time.realtimeSinceStartup * 6f);
+                GUI.color = new Color(pulse, pulse, pulse, 0.7f + pulse * 0.3f);
+                Rect shadowRect = firstPrompt.CalculateRect(false);
+                GUI.Label(shadowRect, "", GUI.skin.box);
+
+                GUI.color = ogColor;
+                GUI.skin.label.alignment = TextAnchor.LowerCenter;
+                GUI.Label(shadowRect, Lang.Get("movemouse"));
+                UIBullshit._GUI_SetTooltip(Lang.Get("movemouse"), "");
+            }
+
+            GUI.skin.label.alignment = TextAnchor.UpperCenter;
+            Rect rect = firstPrompt.CalculateRect(true).ShrinkBorder(3 * UIMainMenu.GetMenuUIScale());
+            UIBullshit.CheckCursorOverlap(rect);
+
+            GUILayout.BeginArea(rect, "", GUI.skin.box);
+            try {
+                GUI.skin.label.richText = true;
+                UIBullshit._GUI_BiggerLabel(firstPrompt.name, 1.4f);
+
+                GUI.skin.label.wordWrap = true;
+                GUILayout.Label(firstPrompt.text);
+                GUI.skin.label.wordWrap = ogWrap;
+
+                if (firstPrompt.timeout > 0 && firstPrompt.choices != null) {
+                    GUILayout.BeginVertical();
+                    GUILayout.FlexibleSpace();
+                    GUILayout.EndVertical();
+
+                    bool ogEnabled = GUI.enabled;
+                    if (prompt_show_progress < 1 && mouse_is_near_area) {
+                        GUI.enabled = false;
+                        float pulse = Mathf.Sin(Time.realtimeSinceStartup * 6f);
+                        GUI.color = new Color(1, 1, 1, 0.2f + pulse * 0.15f);
+                    }
+
+                    GUILayout.BeginHorizontal();
+                    GUILayout.FlexibleSpace();
+                    for (int i = 0; i < firstPrompt.choices.Length; i++) {
+                        Prompt.PromptChoice item = firstPrompt.choices[i];
+                        if (GUILayout.Button(item.text)) {
+                            PromptUse(firstPrompt, i);
+                            Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
+                        }
+                        GUILayout.FlexibleSpace();
+                    }
+                    GUILayout.EndHorizontal();
+
+                    GUI.enabled = ogEnabled;
+                    GUI.color = ogColor;
+                }
+            } finally {
+                GUILayout.EndArea();
+                GUI.skin.label.alignment = ogAlignment;
+                GUI.skin.label.richText = ogRich;
+                GUI.skin.label.wordWrap = ogWrap;
+                GUI.color = ogColor;
+            }
         } finally {
             FixChoicePrompt.End();
         }
     }
-
-
 }
 
-
+/// <summary>
+/// 多人房间踢人 / 语音禁言 / 文字禁言投票管理单例。
+/// </summary>
 public class VoteSystem : CasualtiesTogetherSingleton {
-
-
-
-
     public delegate void VoteEndAction(HashSet<ScavPlayer> voted_yes, HashSet<ScavPlayer> voted_no, HashSet<ScavPlayer> voted_ignore);
 
-    static ushort _voteCounter = 0;
+    private static ushort _voteCounter;
 
     public class Server_VoteState {
         public ushort id;
         public float time;
-
         public VoteEndAction endAction;
-
         public HashSet<ScavPlayer> voters;
         public HashSet<ScavPlayer> votedPositive = new();
         public HashSet<ScavPlayer> votedNegative = new();
     }
 
-    public static Server_VoteState Server_ActiveVote = null;
+    public static Server_VoteState Server_ActiveVote;
 
-    void Start() {
-
-        ServerMain.ServerCustomCommandsDict.Add("vote", (plr, cmd, argv) => {
-            var callername = "SERVER";
-            if (plr != null) {
-                callername = plr.playerName;
+    private void Start() {
+        ServerMain.ServerCustomCommandsDict["vote"] = (plr, cmd, argv) => {
+            // 严格校验指令参数个数与当前是否存在进行中的投票，防止越界或重复发起抛异常
+            if (argv == null || argv.Length < 3 || Server_ActiveVote != null) {
+                return;
             }
 
+            string callerName = plr != null ? plr.playerName : "SERVER";
+            string actionType = argv[1];
+            string targetName = argv[2];
 
-            if (argv[1] == "kick") {
-                var plrname = argv[2];
-                var res = Con.PerformActionOnPlayersByName(plrname, (ScavPlayer oplr) => {
-                    if (!oplr.IsLocal) {
-                        Chat.Server_ChatAnnouncement($"{callername} called a vote kick for {oplr.playerName}");
+            if (actionType == "kick") {
+                Con.PerformActionOnPlayersByName(targetName, oplr => {
+                    if (!oplr.IsLocal && Server_ActiveVote == null) {
+                        Chat.Server_ChatAnnouncement($"{callerName} called a vote kick for {oplr.playerName}");
                         Server_VoteKick(oplr, plr);
                     }
                 }, false, plr, false, true);
-
-            } else if (argv[1] == "mutevc") {
-                var plrname = argv[2];
-                var res = Con.PerformActionOnPlayersByName(plrname, (ScavPlayer oplr) => {
-                    if (!oplr.IsLocal) {
-                        Chat.Server_ChatAnnouncement($"{callername} called a vote mute vc for {oplr.playerName}");
+            } else if (actionType == "mutevc") {
+                Con.PerformActionOnPlayersByName(targetName, oplr => {
+                    if (!oplr.IsLocal && Server_ActiveVote == null) {
+                        Chat.Server_ChatAnnouncement($"{callerName} called a vote mute vc for {oplr.playerName}");
                         Server_VoteMuteVC(oplr, plr);
                     }
                 }, false, plr, false, true);
-
-            } else if (argv[1] == "mutetc") {
-                var plrname = argv[2];
-                var res = Con.PerformActionOnPlayersByName(plrname, (ScavPlayer oplr) => {
-                    if (!oplr.IsLocal) {
-                        Chat.Server_ChatAnnouncement($"{callername} called a vote mute tc for {oplr.playerName}");
+            } else if (actionType == "mutetc") {
+                Con.PerformActionOnPlayersByName(targetName, oplr => {
+                    if (!oplr.IsLocal && Server_ActiveVote == null) {
+                        Chat.Server_ChatAnnouncement($"{callerName} called a vote mute tc for {oplr.playerName}");
                         Server_VoteMuteTC(oplr, plr);
                     }
                 }, false, plr, false, true);
-
             }
-
-        });
+        };
     }
 
     public static void Server_VoteKick(ScavPlayer plr, ScavPlayer who_called_the_vote = null) {
-        var txt = $"Kick {plr.playerName}";
-
-
-        Server_AnnounceVote("Vote Kick", txt, 10, (HashSet<ScavPlayer> voted_yes, HashSet<ScavPlayer> voted_no, HashSet<ScavPlayer> voted_ignore) => {
-            voted_ignore.Remove(plr);
-            var total = (float)(voted_yes.Count + voted_no.Count + voted_ignore.Count);
-            var yes = (float)voted_yes.Count;
+        string txt = $"Kick {plr.playerName}";
+        Server_AnnounceVote("Vote Kick", txt, 10, (votedYes, votedNo, votedIgnore) => {
+            votedIgnore.Remove(plr);
+            float total = votedYes.Count + votedNo.Count + votedIgnore.Count;
             if (total > 0) {
-                var perc = yes / total;
-
-                var percentStr = Mathf.RoundToInt(perc * 100f).ToString();
+                float perc = votedYes.Count / total;
+                string percentStr = Mathf.RoundToInt(perc * 100f).ToString();
                 Chat.Server_ChatAnnouncement($"Vote kick result: {percentStr}%");
-                if (perc > 0.5f) {
-                    if (plr != null) {
-                        plr.Server_Kick($"Vote kicked. {percentStr}%");
-                    }
+                if (perc > 0.5f && plr != null) {
+                    plr.Server_Kick($"Vote kicked. {percentStr}%");
                 }
             }
         });
     }
+
     public static void Server_VoteMuteVC(ScavPlayer plr, ScavPlayer who_called_the_vote = null) {
-        var txt = $"Mute {plr.playerName}";
-
-
-        Server_AnnounceVote("Vote Mute VC", txt, 10, (HashSet<ScavPlayer> voted_yes, HashSet<ScavPlayer> voted_no, HashSet<ScavPlayer> voted_ignore) => {
-            voted_ignore.Remove(plr);
-            var total = (float)(voted_yes.Count + voted_no.Count + voted_ignore.Count);
-            var yes = (float)voted_yes.Count;
+        string txt = $"Mute {plr.playerName}";
+        Server_AnnounceVote("Vote Mute VC", txt, 10, (votedYes, votedNo, votedIgnore) => {
+            votedIgnore.Remove(plr);
+            float total = votedYes.Count + votedNo.Count + votedIgnore.Count;
             if (total > 0) {
-                var perc = yes / total;
-
+                float perc = votedYes.Count / total;
                 Chat.Server_ChatAnnouncement($"Vote mute vc result: {Mathf.RoundToInt(perc * 100f)}%");
-                if (perc > 0.5f) {
-                    if (plr != null) {
-                        plr.server_mute_vc = true;
-                    }
+                if (perc > 0.5f && plr != null) {
+                    plr.server_mute_vc = true;
                 }
             }
         });
     }
+
     public static void Server_VoteMuteTC(ScavPlayer plr, ScavPlayer who_called_the_vote = null) {
-        var txt = $"Mute {plr.playerName}";
-
-
-        Server_AnnounceVote("Vote Mute TC", txt, 10, (HashSet<ScavPlayer> voted_yes, HashSet<ScavPlayer> voted_no, HashSet<ScavPlayer> voted_ignore) => {
-            voted_ignore.Remove(plr);
-            var total = (float)(voted_yes.Count + voted_no.Count + voted_ignore.Count);
-            var yes = (float)voted_yes.Count;
+        string txt = $"Mute {plr.playerName}";
+        Server_AnnounceVote("Vote Mute TC", txt, 10, (votedYes, votedNo, votedIgnore) => {
+            votedIgnore.Remove(plr);
+            float total = votedYes.Count + votedNo.Count + votedIgnore.Count;
             if (total > 0) {
-                var perc = yes / total;
-
+                float perc = votedYes.Count / total;
                 Chat.Server_ChatAnnouncement($"Vote mute tc result: {Mathf.RoundToInt(perc * 100f)}%");
-                if (perc > 0.5f) {
-                    if (plr != null) {
-                        plr.server_mute_tc = true;
-                    }
+                if (perc > 0.5f && plr != null) {
+                    plr.server_mute_tc = true;
                 }
             }
         });
@@ -489,62 +403,53 @@ public class VoteSystem : CasualtiesTogetherSingleton {
 
     public static void Server_AnnounceVote(in string title, in string message, in float timetovote, in VoteEndAction action, IReadOnlyList<ScavPlayer> voters = null) {
         if (Net.IsClient) {
-            throw new Exception("Client can't do that!");
+            throw new InvalidOperationException("Client can't start server votes.");
         }
         if (Server_ActiveVote != null) {
-            throw new Exception("Already voting");
+            throw new InvalidOperationException("Already voting");
         }
 
         voters ??= ScavPlayer.AllPlayers.ToList();
-
         if (voters.Count > 0) {
-            Server_ActiveVote = new Server_VoteState() {
+            Server_ActiveVote = new Server_VoteState {
                 id = _voteCounter++,
                 time = timetovote + 1,
                 endAction = action,
                 voters = new HashSet<ScavPlayer>(voters),
             };
 
-
-            var writer = Net.CreateWriter(NetmsgId.CLIENT_AnnounceVote);
+            NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_AnnounceVote);
             writer.Put(Server_ActiveVote.id);
             writer.Put(title);
             writer.Put(message);
             writer.Put(timetovote);
             Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, voters);
-
         } else {
             action.Invoke(null, null, null);
         }
-
     }
 
-
-
     [ClientReceiver((byte)NetmsgId.CLIENT_AnnounceVote, false)]
-    static void ClientReceiver__AnnounceVote(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-
-        var voteid = (reader.GetUShort());
-        var title = (reader.GetString());
-        var message = (reader.GetString());
-        var timetovote = (reader.GetFloat());
+    private static void ClientReceiver__AnnounceVote(knetid _, NetDataReader reader) {
+        ushort voteId = reader.GetUShort();
+        string title = reader.GetString();
+        string message = reader.GetString();
+        float timeToVote = reader.GetFloat();
 
         Lang.MsgTryParse(ref title);
         Lang.MsgTryParse(ref message);
 
-
-
         UIChoicePrompt.ShowPrompt(new UIChoicePrompt.Prompt {
             text = message,
             name = title,
-            timeout = timetovote,
+            timeout = timeToVote,
             defaultcanignore = true,
-            choices = new UIChoicePrompt.Prompt.PromptChoice[] {
+            choices = new[] {
                 new UIChoicePrompt.Prompt.PromptChoice {
                     text = Lang.Get("yes"),
                     action = () => {
-                        var writer = Net.CreateWriter(NetmsgId.SERVER_Vote);
-                        writer.Put(voteid);
+                        NetDataWriter writer = Net.CreateWriter(NetmsgId.SERVER_Vote);
+                        writer.Put(voteId);
                         writer.Put((byte)0);
                         Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
                     }
@@ -552,8 +457,8 @@ public class VoteSystem : CasualtiesTogetherSingleton {
                 new UIChoicePrompt.Prompt.PromptChoice {
                     text = Lang.Get("no"),
                     action = () => {
-                        var writer = Net.CreateWriter(NetmsgId.SERVER_Vote);
-                        writer.Put(voteid);
+                        NetDataWriter writer = Net.CreateWriter(NetmsgId.SERVER_Vote);
+                        writer.Put(voteId);
                         writer.Put((byte)1);
                         Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
                     }
@@ -563,91 +468,46 @@ public class VoteSystem : CasualtiesTogetherSingleton {
     }
 
     [ServerReceiver((byte)NetmsgId.SERVER_Vote)]
-    static void ServerReceiver__Vote(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-
-        var voteid = (reader.GetUShort());
-        var votenumber = (reader.GetByte());
-        if (ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr)) {
-            if (Server_ActiveVote != null) {
-                if (Server_ActiveVote.voters.Contains(plr)) {
-                    if (!Server_ActiveVote.votedPositive.Contains(plr) && !Server_ActiveVote.votedNegative.Contains(plr)) { // didn't vote before
-
-                        if (votenumber == 0) {
-                            Server_ActiveVote.votedPositive.Add(plr);
-                        } else {
-                            Server_ActiveVote.votedNegative.Add(plr);
-                        }
-
-                    }
-                }
-            }
+    private static void ServerReceiver__Vote(knetid clientId, NetDataReader reader) {
+        ushort voteId = reader.GetUShort();
+        byte voteNumber = reader.GetByte();
+        if (Server_ActiveVote == null || Server_ActiveVote.id != voteId) {
+            return;
         }
-
-    }
-
-    void Update() {
-
-
-
-        if (Net.IsServer && Server_ActiveVote != null) {
-            Server_ActiveVote.time -= Time.deltaTime;
-
-            // remove players that may have disconnected
-            Server_ActiveVote.voters.RemoveWhere(x => x == null);
-            Server_ActiveVote.votedPositive.RemoveWhere(x => x == null);
-            Server_ActiveVote.votedNegative.RemoveWhere(x => x == null);
-
-            HashSet<ScavPlayer> ignorers = new HashSet<ScavPlayer>(Server_ActiveVote.voters);
-            ignorers.ExceptWith(Server_ActiveVote.votedPositive);
-            ignorers.ExceptWith(Server_ActiveVote.votedNegative);
-
-            if (Server_ActiveVote.time < 0 || ignorers.Count == 0) {
-                try {
-                    Server_ActiveVote.endAction.Invoke(Server_ActiveVote.votedPositive, Server_ActiveVote.votedNegative, ignorers);
-                } catch (Exception e) {
-                    log.error(e);
-                }
-                Server_ActiveVote = null;
+        if (ScavPlayer.TryGetPlayerFromClientId(clientId, out ScavPlayer plr)
+            && Server_ActiveVote.voters.Contains(plr)
+            && !Server_ActiveVote.votedPositive.Contains(plr)
+            && !Server_ActiveVote.votedNegative.Contains(plr)) {
+            if (voteNumber == 0) {
+                Server_ActiveVote.votedPositive.Add(plr);
             } else {
-
+                Server_ActiveVote.votedNegative.Add(plr);
             }
-
-
         }
     }
 
+    private void Update() {
+        if (!Net.IsServer || Server_ActiveVote == null) {
+            return;
+        }
 
+        Server_ActiveVote.time -= Time.deltaTime;
 
+        Server_ActiveVote.voters.RemoveWhere(x => x == null);
+        Server_ActiveVote.votedPositive.RemoveWhere(x => x == null);
+        Server_ActiveVote.votedNegative.RemoveWhere(x => x == null);
 
+        HashSet<ScavPlayer> ignorers = new HashSet<ScavPlayer>(Server_ActiveVote.voters);
+        ignorers.ExceptWith(Server_ActiveVote.votedPositive);
+        ignorers.ExceptWith(Server_ActiveVote.votedNegative);
 
-
-
-    /*
-     
-    static TwoWayDictionary<uint, string> _RequestHandlerOriginalNames = new();
-    static Dictionary<uint, Action<ScavPlayer, NetDataReader, NetDataWriter>> _ServerRequestHandlers = new();
-    static Dictionary<uint, Action<NetDataReader, NetDataWriter>> _ClientRequestHandlers = new();
-
-    public static void Server_Request(ScavPlayer plr, NetDataWriter writer, Action<NetDataReader> action) {
-        var writer = Net.CreateWriter((byte)NetmsgId.___1);
-        writer.Put(plr.playerId);
-
-
+        if (Server_ActiveVote.time < 0 || ignorers.Count == 0) {
+            try {
+                Server_ActiveVote.endAction?.Invoke(Server_ActiveVote.votedPositive, Server_ActiveVote.votedNegative, ignorers);
+            } catch (Exception ex) {
+                ModLog.Exception(LogDomain.UI, "VoteSystem.EndVote", ex);
+            }
+            Server_ActiveVote = null;
+        }
     }
-
-    [ClientReceiver((byte)NetmsgId.___1, false)]
-    static void ClientReceiver__AnnounceVote(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-
-        var voteid = (reader.GetUShort());
-        var title = (reader.GetString());
-        var message = (reader.GetString());
-        var timetovote = (reader.GetFloat());
-
-    }
-     */
-
-
-
-
-
 }

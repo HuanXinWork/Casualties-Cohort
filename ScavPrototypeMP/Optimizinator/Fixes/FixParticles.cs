@@ -86,7 +86,7 @@ internal static class FixParticles
 					startColor = Color.white,
 					startSize3D = new Vector2(1.25f, surface ? 0.625f : 1.25f)
 				};
-				Add(bucket, particle);
+				Add(bucket, in particle);
 			}
 		}
 
@@ -101,7 +101,7 @@ internal static class FixParticles
 	}
 
 	// grow that liquid's buffer by doubling. the array lives for the session.
-	private static void Add(int bucket, ParticleSystem.Particle particle)
+	private static void Add(int bucket, in ParticleSystem.Particle particle)
 	{
 		int count = _counts[bucket];
 		ParticleSystem.Particle[] buffer = _buffers[bucket];

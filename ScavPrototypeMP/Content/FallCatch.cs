@@ -3,6 +3,7 @@ using LiteNetLib;
 using LiteNetLib.Utils;
 using System.Collections.Generic;
 using System.Globalization;
+using Together.MpConstants;
 using UnityEngine;
 
 namespace Together {
@@ -38,7 +39,7 @@ namespace Together {
 
         [CTPostInit]
         static void Init() {
-            ServerMain.ServerCustomCommandsDict["fall_arm"] = (plr, cmd, args) => {
+            ServerMain.ServerCustomCommandsDict[CustomWireCommands.FallArm] = (plr, cmd, args) => {
                 if (plr == null || args == null || args.Length < 2) {
                     return;
                 }
@@ -46,7 +47,7 @@ namespace Together {
                 NoteArmed(plr.playerId.id, on);
                 BroadcastArm(plr.playerId.id, on);
             };
-            ServerMain.ServerCustomCommandsDict["fall_hit"] = (plr, cmd, args) => {
+            ServerMain.ServerCustomCommandsDict[CustomWireCommands.FallHit] = (plr, cmd, args) => {
                 if (plr == null || args == null || args.Length < 3) {
                     return;
                 }
@@ -58,12 +59,12 @@ namespace Together {
                 }
                 AcceptHit(plr, catcherId, force);
             };
-            ClientMain.ClientCustomCommandsDict["fall_arm"] = (cmd, reader) => {
+            ClientMain.ClientCustomCommandsDict[CustomWireCommands.FallArm] = (cmd, reader) => {
                 reader.Get(out ushort id);
                 reader.Get(out byte on);
                 NoteArmed(id, on == 1);
             };
-            ClientMain.ClientCustomCommandsDict["fall_hit"] = (cmd, reader) => {
+            ClientMain.ClientCustomCommandsDict[CustomWireCommands.FallHit] = (cmd, reader) => {
                 reader.Get(out float force);
                 HitLocal(force);
             };
@@ -95,7 +96,7 @@ namespace Together {
                     NoteArmed(me.plr.playerId.id, true);
                     BroadcastArm(me.plr.playerId.id, true);
                 } else {
-                    SendCommand("fall_arm 1");
+                    SendCommand(CustomWireCommands.FallArm + " 1");
                 }
                 return;
             }
@@ -108,7 +109,7 @@ namespace Together {
                 NoteArmed(me.plr.playerId.id, false);
                 BroadcastArm(me.plr.playerId.id, false);
             } else {
-                SendCommand("fall_arm 0");
+                SendCommand(CustomWireCommands.FallArm + " 0");
             }
         }
 
@@ -252,8 +253,8 @@ namespace Together {
             if (catcher.IsLocal) {
                 return;
             }
-            NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
-            writer.Put("fall_hit");
+            NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+            writer.Put(CustomWireCommands.FallHit);
             writer.Put(force);
             Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, catcher.playerId);
         }
@@ -329,11 +330,11 @@ namespace Together {
                 AcceptHit(me.plr, catcherId, force);
                 return;
             }
-            SendCommand("fall_hit " + catcherId.ToString(CultureInfo.InvariantCulture) + " " + force.ToString("R", CultureInfo.InvariantCulture));
+            SendCommand(CustomWireCommands.FallHit + " " + catcherId.ToString(CultureInfo.InvariantCulture) + " " + force.ToString("R", CultureInfo.InvariantCulture));
         }
 
         static void SendCommand(string command) {
-            NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
+            NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
             writer.Put(command);
             Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
         }
@@ -342,8 +343,8 @@ namespace Together {
             if (!Net.IsServer) {
                 return;
             }
-            NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
-            writer.Put("fall_arm");
+            NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+            writer.Put(CustomWireCommands.FallArm);
             writer.Put(id);
             writer.Put((byte)(on ? 1 : 0));
             Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, ServerMain.AllClientIdsExceptHost);

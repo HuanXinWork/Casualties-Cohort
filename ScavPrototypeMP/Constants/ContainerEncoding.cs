@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 
 namespace Together.MpConstants {
     /// <summary>
-    /// 物品父容器同步字段 <c>container_data1</c> 的线上字节编码规范（与原版 v5.5.x 线协议 100% 字节级兼容）。
+    /// 物品父容器同步字段 <c>container_data1</c> 的线上字节编码规范（严格对齐原版 v5.5.x 线协议：<c>0=地面, 1=容器, 100=穿戴, 200+slot=随身槽位</c>）。
     /// </summary>
     public enum ItemParentKind : byte {
         /// <summary>散落在地面世界中（无父级容器或槽位）。</summary>
@@ -13,10 +13,12 @@ namespace Together.MpConstants {
         MedicalSpecial = 2,
         /// <summary>抓钩尖端等特殊依附态。</summary>
         GrabberSpecial = 3,
+        /// <summary>穿戴在角色装备栏上（线上编码值固定为 100）。</summary>
+        Wearable = 100,
     }
 
     /// <summary>
-    /// 统一收口全工程所有容器状态字节的判断与槽位编解码逻辑，彻底消灭散落的 <c>== 0</c>、<c>== 1</c>、<c>&gt;= 100</c>、<c>&gt;= 200</c> 裸魔数。
+    /// 统一收口全工程所有容器状态字节的判断与槽位编解码逻辑（<c>0=World, 1=Container, 100=Wearable, 200+slot=BodySlot</c>）。
     /// </summary>
     public static class ContainerEncoding {
         /// <summary>地面世界散落态编码值。</summary>
@@ -28,11 +30,14 @@ namespace Together.MpConstants {
         /// <summary>医疗/特殊依附态编码值。</summary>
         public const byte MedicalByte = 2;
 
-        /// <summary>角色随身物品栏槽位起始编码值（实际槽位下标 = <c>data - BodySlotOffset</c>）。</summary>
-        public const byte BodySlotOffset = 100;
+        /// <summary>角色穿戴装备态编码值（原版 v5.5.x 线协议固定为 100）。</summary>
+        public const byte WearableByte = 100;
 
-        /// <summary>角色穿戴装备栏起始编码值（穿戴槽位下标 = <c>data - WearableOffset</c>）。</summary>
-        public const byte WearableOffset = 200;
+        /// <summary>兼容别名：穿戴态基准值（100）。</summary>
+        public const byte WearableOffset = WearableByte;
+
+        /// <summary>角色随身物品栏槽位起始编码值（原版 v5.5.x 线协议：实际槽位下标 = <c>data - 200</c>）。</summary>
+        public const byte BodySlotOffset = 200;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsLooseInWorld(byte data) => data == WorldByte;
@@ -41,13 +46,14 @@ namespace Together.MpConstants {
         public static bool IsInsideContainer(byte data) => data == ContainerByte;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsHeldInBodySlot(byte data) => data >= BodySlotOffset && data < WearableOffset;
+        public static bool IsWornOnBody(byte data) => data == WearableByte;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsWornOnBody(byte data) => data >= WearableOffset;
+        public static bool IsHeldInBodySlot(byte data) => data >= BodySlotOffset;
 
+        /// <summary>判断物品是否附着在角色躯体上（穿戴 100 或随身槽位 &gt;= 200）。</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsAttachedToBody(byte data) => data >= BodySlotOffset;
+        public static bool IsAttachedToBody(byte data) => data == WearableByte || data >= BodySlotOffset;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static byte EncodeBodySlot(int slotIndex) => checked((byte)(BodySlotOffset + slotIndex));
@@ -66,6 +72,6 @@ namespace Together.MpConstants {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static byte EncodeWearable(int wearIndex = 0) => checked((byte)(WearableOffset + wearIndex));
+        public static byte EncodeWearable() => WearableByte;
     }
 }

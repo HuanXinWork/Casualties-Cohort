@@ -1,38 +1,32 @@
-using HarmonyLib;
-using Together;
 using UnityEngine;
 
 namespace KrokV5Optimization;
 
 /// <summary>
-/// the HUD drew twice inside one UI event. skip the second call. layout and the visible draw still each run once.
+/// 防止局内 HUD 在同一帧同一 IMGUI 事件类型内重复绘制两遍（Layout 与 Repaint 属于不同事件类型，各自正常执行一次）。
 /// </summary>
-internal static class FixGuiLayout
-{
-	internal static long Skip;
+internal static class FixGuiLayout {
+    internal static long Skip;
 
-	static int _frame = -1;
-	static int _event = int.MinValue;
-	static int _count;
+    private static int _frame = -1;
+    private static int _event = int.MinValue;
+    private static int _count;
 
-	// this file's counters on the 10s report.
-	internal static string Evidence() => "guiHud=" + Skip;
+    internal static string Evidence() => "guiHud=" + Skip;
 
-	// false skips the second _GUI_DoInGameUI in the same frame and IMGUI event. layout and repaint are different events, so each still runs once.
-	internal static bool Allow()
-	{
-		int frame = Time.frameCount;
-		int kind = Event.current == null ? -1 : (int)Event.current.type;
-		if (frame != _frame || kind != _event)
-		{
-			_frame = frame;
-			_event = kind;
-			_count = 0;
-		}
-		_count++;
-		if (_count == 1)
-			return true;
-		Skip++;
-		return false;
-	}
+    internal static bool Allow() {
+        int frame = Time.frameCount;
+        int kind = Event.current == null ? -1 : (int)Event.current.type;
+        if (frame != _frame || kind != _event) {
+            _frame = frame;
+            _event = kind;
+            _count = 0;
+        }
+        _count++;
+        if (_count == 1) {
+            return true;
+        }
+        Skip++;
+        return false;
+    }
 }

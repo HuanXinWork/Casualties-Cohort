@@ -19,6 +19,7 @@
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<Configurations>Debug;Release;Playtest;DebugFullgame;ReleaseFullgame;PlaytestFullgame</Configurations>
 		<EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+		<NoWarn>$(NoWarn);MSB3277</NoWarn>
 		<DefineConstants>$(DefineConstants);UNITY_2018_3_OR_NEWER;UNITY_2019_1_OR_NEWER;UNITY_5_3_OR_NEWER;UNITY_2018_4_OR_NEWER;MP_GAMEMODES</DefineConstants>
 		<StartAction>Program</StartAction>
 		<StartProgram>$(GameDir)\CasualtiesUnknown.exe</StartProgram>

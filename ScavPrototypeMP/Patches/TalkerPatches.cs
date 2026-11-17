@@ -69,7 +69,7 @@ public static class SpeechCharContext {
         body.GetCoUtilsInstance().SelectForMPOverride();
     }
 
-    public static void PinPostfix(Body body, Pin pin) {
+    public static void PinPostfix(Body body, in Pin pin) {
         if (!pin.run) {
             return;
         }
@@ -100,8 +100,8 @@ static class Talker_Update_SpeechChar_MultiplayerPatch {
         SpeechCharContext.PinPrefix(__instance != null ? __instance.body : null, ref __state);
     }
 
-    static void Postfix(Talker __instance, SpeechCharContext.Pin __state) {
-        SpeechCharContext.PinPostfix(__instance != null ? __instance.body : null, __state);
+    static void Postfix(Talker __instance, ref SpeechCharContext.Pin __state) {
+        SpeechCharContext.PinPostfix(__instance != null ? __instance.body : null, in __state);
     }
 }
 
@@ -115,8 +115,8 @@ static class Talker_EatLines_SpeechChar_MultiplayerPatch {
         SpeechCharContext.PinPrefix(__instance != null ? __instance.body : null, ref __state);
     }
 
-    static void Postfix(Talker __instance, SpeechCharContext.Pin __state) {
-        SpeechCharContext.PinPostfix(__instance != null ? __instance.body : null, __state);
+    static void Postfix(Talker __instance, ref SpeechCharContext.Pin __state) {
+        SpeechCharContext.PinPostfix(__instance != null ? __instance.body : null, in __state);
     }
 }
 
@@ -171,15 +171,7 @@ public static class Talker_Talk_MultiplayerPatch {
         var distortedmsg = message;
         try {
             talker.currentString = ("");
-
-            const bool bypassSkip = true;
-
-            List<string> talkerInput;
-            if (bypassSkip) {
-                talkerInput = new List<string> { "-" + message };
-            } else {
-                talkerInput = new List<string> { message };
-            }
+            List<string> talkerInput = new List<string> { "-" + message };
             Talker_Talk_MultiplayerPatch.Force(talker, talkerInput, null, true, false); // make the Talk function do speech impairment effects
 
             distortedmsg = talker.currentString; // find the distorted message
@@ -195,9 +187,7 @@ public static class Talker_Talk_MultiplayerPatch {
                 }
                 distortedmsg = stringBuilder.ToString();
             } else {
-                if (bypassSkip) {
-                    distortedmsg = distortedmsg.Substring(1, distortedmsg.Length - 1);// trim the "-" (added to work around the distortion skip)
-                }
+                distortedmsg = distortedmsg.Substring(1, distortedmsg.Length - 1);// trim the "-" (added to work around the distortion skip)
             }
         } finally {
 #if FULLGAME
