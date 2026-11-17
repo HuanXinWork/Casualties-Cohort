@@ -8,7 +8,6 @@ using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering.Universal;
 using UnityEngine.TextCore;
-using UnityEngine.Timeline;
 
 namespace Together;
 
