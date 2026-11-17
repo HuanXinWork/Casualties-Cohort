@@ -174,7 +174,7 @@ public partial class ServerMain {
 
                             PlayerCamera.main.ToMainMenu();
                             return;
-                        } else if (Multiplayer.rules.AutoExitWhenAllDied && ScavPlayer.AllLivingPlayers.Count == 0) {
+                        } else if (Multiplayer.rules.AutoExitWhenAllDied && ScavPlayer.AllLivingPlayers.Count == 0 && !ModHooks.QueryBlockAutoExitOnAllDead()) {
                             _ded_server_switch_counter = -5;
 
                             var msg = $"Auto-exiting to main menu because everyone died.";

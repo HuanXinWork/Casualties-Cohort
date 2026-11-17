@@ -60,18 +60,18 @@ public partial class WorldMP {
                 WorldGeneration_GenerateWorld_MultiplayerPatch.client_firstworldgenparams_are_used = true;
                 depth = world.biomeDepth;
                 seed = WorldGeneration_GenerateWorld_MultiplayerPatch.firstworldgenparams.randomstate.GetHashCode();
+                ModHooks.NotifyWorldSeedApplied(ModHooks.PendingClientCustomWorldSeed, isHost: false);
             } else {
                 // 服务端在快照 LastBeforeGenerationState 前优先向外部存档模组查询是否有固定世界种子覆写
                 int defaultSeed = seed;
                 seed = TogetherSaveWorldApi.ResolveServerWorldSeed(depth, seed);
-                if (seed != defaultSeed
-                    || (TogetherSaveWorldApi.ServerWorldSeedOverride != null
-                        && TogetherSaveWorldApi.ResolveServerWorldSeed(depth, defaultSeed ^ 1) == seed)) {
+                if (seed != defaultSeed || ModHooks.LastAppliedCustomWorldSeed != 0) {
                     UnityEngine.Random.InitState(seed);
                 }
 
                 WorldGeneration_GenerateWorld_MultiplayerPatch.firstworldgenparams = new LastBeforeGenerationState();
                 ServerMain.Server_AnnounceSeed(ServerMain.AllClientIdsExceptHost);
+                ModHooks.NotifyWorldSeedApplied(ModHooks.LastAppliedCustomWorldSeed, isHost: true);
 
                 // 钻探舱模式清空偏移使全员出生在舱内；普通下层挖掘保留玩家间横向相对偏移
                 if (world.doPod) {
@@ -309,6 +309,14 @@ public partial class WorldMP {
 
         yield return WorldGeneration_FinishWorldGeneration_MultiplayerPatch.FinishWorldGeneration(world);
         ModLog.Info("WorldGeneration.FinishWorldGeneration completed", LogDomain.World);
+
+        // 房主读档/回档完成后，若外部存档模组提供了精确出生坐标覆写，立即应用并回收存档装备
+        if (Net.IsRunning && Net.IsServer && !Net.IsDedicatedServer
+            && ScavPlayer.LocalPlayer != null && ScavPlayer.LocalPlayer.netBody != null && ScavPlayer.LocalPlayer.body != null
+            && ModHooks.TryResolveSpawnOverride(ScavPlayer.LocalPlayer, ScavPlayer.LocalPlayer.body, out Vector2 hostOverridePos)) {
+            ScavPlayer.LocalPlayer.netBody.SetBodyPosition(hostOverridePos);
+            PlayerCheckpoint.ReclaimGear(ScavPlayer.LocalPlayer.playerId);
+        }
 
         if (Util.TryGetLocalBody(out var localBodyAfter) && !localBodyAfter.alive) {
             UIInGame.StartSpectatorMode();

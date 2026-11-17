@@ -383,6 +383,7 @@ public partial class ClientMain {
     [ClientReceiver((byte)NetmsgId.GenerateWorld_SeedAnnounce)]
     static void ClientReceiver__GenerateWorld_SeedAnnounce(knetid _, LiteNetLib.Utils.NetDataReader reader) {
         reader.Get(out LastBeforeGenerationState rand);
+        ModHooks.PendingClientCustomWorldSeed = reader.AvailableBytes >= sizeof(int) ? reader.GetInt() : 0;
 
         Multiplayer.DoMultiplayerStatusMessageLog("GenerateWorld_SeedAnnounce, received worldgen seed.");
 

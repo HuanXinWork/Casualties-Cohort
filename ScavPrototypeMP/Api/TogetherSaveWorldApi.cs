@@ -117,7 +117,13 @@ namespace Together.Api {
         }
 
         internal static bool ShouldBypassSingleplayerBlock() {
-            if (Net.IsRunning || AllowSingleplayerStartOverride == null) {
+            if (Net.IsRunning) {
+                return false;
+            }
+            if (ModHooks.AllowSingleplayerPassthrough) {
+                return true;
+            }
+            if (AllowSingleplayerStartOverride == null) {
                 return false;
             }
             try {
@@ -129,12 +135,22 @@ namespace Together.Api {
         }
 
         internal static int ResolveServerWorldSeed(int depth, int defaultSeed) {
+            int? hookSeed = ModHooks.QueryCustomWorldSeed();
+            if (hookSeed.HasValue && hookSeed.Value != 0) {
+                ModHooks.LastAppliedCustomWorldSeed = hookSeed.Value;
+                return hookSeed.Value;
+            }
+            ModHooks.LastAppliedCustomWorldSeed = 0;
             if (ServerWorldSeedOverride == null) {
                 return defaultSeed;
             }
             try {
                 int? custom = ServerWorldSeedOverride.Invoke(depth);
-                return custom ?? defaultSeed;
+                if (custom.HasValue) {
+                    ModHooks.LastAppliedCustomWorldSeed = custom.Value;
+                    return custom.Value;
+                }
+                return defaultSeed;
             } catch (Exception ex) {
                 ModLog.Exception(LogDomain.Interop, nameof(ResolveServerWorldSeed), ex);
                 return defaultSeed;

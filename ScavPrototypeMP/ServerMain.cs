@@ -128,6 +128,10 @@ public partial class ServerMain : MonoBehaviour {
     public static void Server_AnnounceSeed(IReadOnlyList<knetid> to_who) {
         var writer = Net.CreateWriter(NetmsgId.GenerateWorld_SeedAnnounce);
         writer.Put(WorldGeneration_GenerateWorld_MultiplayerPatch.firstworldgenparams);
+        // 仅在启用外部自定义种子时追加 4 字节尾载荷：原版 v5.5.x 客户端忽略剩余字节，新版客户端据此同步激活固定种子
+        if (ModHooks.LastAppliedCustomWorldSeed != 0) {
+            writer.Put(ModHooks.LastAppliedCustomWorldSeed);
+        }
         Net.Server_SendToClientsVeryReliable(writer, to_who);
     }
 
@@ -228,6 +232,9 @@ public partial class ServerMain : MonoBehaviour {
             } else {
                 if (plr.ServerPlayerState.did_give_spawn_location_from_a_save) {
                     plr.ServerPlayerState.did_give_spawn_location_from_a_save = false;
+                } else if (ModHooks.TryResolveSpawnOverride(plr, pb.body, out Vector2 overridePos)) {
+                    pb.SetBodyPosition(overridePos);
+                    PlayerCheckpoint.ReclaimGear(plr.playerId);
                 } else {
                     if (
                         !Body_PlaceBody_MultiplayerPatch.ShouldKeepLayerXOffset() // off, or doPod (everyone in the pod)
