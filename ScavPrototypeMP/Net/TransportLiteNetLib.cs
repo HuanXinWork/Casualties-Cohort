@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using Together.Diagnostics;
 using Unity.VisualScripting;
 using UnityEngine;
 
@@ -70,12 +71,8 @@ namespace Together {
 
         static bool _DoOnWantToConnect(string ipport_input, Net.NetType type) {
             try {
-                if (UIMainMenu.USERINPUT_NAME.Length < 3) {
-                    Multiplayer.DoMultiplayerStatusMessageLog("Name too short.");
-                    return false;
-                }
-                if (UIMainMenu.USERINPUT_NAME != Multiplayer.SanitizeTextInput(UIMainMenu.USERINPUT_NAME)) {
-                    Multiplayer.DoMultiplayerStatusMessageLog("Invalid Name.");
+                if (!Multiplayer.IsValidPlayerName(UIMainMenu.USERINPUT_NAME, out string nameError)) {
+                    Multiplayer.DoMultiplayerStatusMessageLog(nameError);
                     return false;
                 }
                 if (!Net.TryParseIPPORT(ipport_input, out string ip, out ushort port)) {
@@ -98,18 +95,26 @@ namespace Together {
 
                     bool success = transport.NetManager.Start();
                     if (!success) {
-                        Multiplayer.DoMultiplayerStatusMessageLog("LiteNetLib: CLIENT: NetManager.Start() failed.");
+                        Net.ShutdownReset();
+                        Multiplayer.DoMultiplayerStatusMessageError("LiteNetLib: CLIENT: NetManager.Start() failed.");
                         return false;
                     }
 
+                    // 校验 NetManager.Connect 返回值：当 DNS 解析失败或端点不可达返回 null 时，立即重置连接状态并提示玩家，避免卡死在假连接态（Issue #2）
                     transport.CLIENT_PEER = transport.NetManager.Connect(ip, port, hellopacket);
+                    if (transport.CLIENT_PEER == null) {
+                        Net.ShutdownReset();
+                        Multiplayer.DoMultiplayerStatusMessageError($"LiteNetLib: Failed to resolve or connect to \"{ip}:{port}\".");
+                        return false;
+                    }
                     return true;
                 }
 
                 if (type == Net.NetType.Host || type == Net.NetType.DedicatedServer) {
                     bool success = transport.NetManager.Start(port);
                     if (!success) {
-                        Multiplayer.DoMultiplayerStatusMessageLog("LiteNetLib: SERVER: NetManager.Start() failed.");
+                        Net.ShutdownReset();
+                        Multiplayer.DoMultiplayerStatusMessageError("LiteNetLib: SERVER: NetManager.Start() failed.");
                         return false;
                     }
 
@@ -119,7 +124,9 @@ namespace Together {
 
                 throw new NotImplementedException();
             } catch (Exception e) {
-                Multiplayer.DoMultiplayerStatusMessageError("TransportLiteNetLib.OnWantToConnect:\n" + e.ToString());
+                Net.ShutdownReset();
+                Multiplayer.DoMultiplayerStatusMessageError("TransportLiteNetLib.OnWantToConnect:\n" + e.Message);
+                ModLog.Exception(LogDomain.Transport, nameof(_DoOnWantToConnect), e);
                 return false;
             }
         }

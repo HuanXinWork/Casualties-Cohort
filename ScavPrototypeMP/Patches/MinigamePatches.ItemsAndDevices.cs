@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Reflection;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
@@ -135,25 +136,102 @@ public static class BandageMinigame_DoBandageAction_MultiplayerPatch {
     }
 }
 
+#if FULLGAME
 /// <summary>
-/// 记录每种义肢修补耗材对应的最大破洞修补次数，供服务端扣除耗材耐久时查询。
+/// 记录每种义肢修补耗材对应的最大破洞修补次数，并提供原版耗材服务端权威常量解析与过期缓存清理（对应 PR #60/#58）。
 /// </summary>
 [HarmonyPatch(typeof(Item), nameof(Item.TryProsthesisRepair))]
 public static class ProsthesisRepair_RememberPatchCount {
+    private const int PruneThreshold = 256;
+    private const int MaxModdedHoleCountClamp = 64;
+
     public static readonly Dictionary<ushort, int> PatchCount = new Dictionary<ushort, int>();
+    private static readonly List<ushort> StaleKeys = new List<ushort>();
 
     private static void Prefix(Item item, int holeCount) {
         if (item == null || holeCount < 1) {
             return;
         }
+        PruneStaleEntriesIfNeeded();
         if (NetObjectRegistry.TryGetSyncInfo(item.gameObject, out SyncInfo si) && si != null) {
             PatchCount[si.syncId.id] = holeCount;
         }
     }
+
+    /// <summary>
+    /// 对照原版 <c>Item.cs</c> 全部 11 种义肢修补耗材 ID 返回权威 <c>holeCount</c>，防恶意客机伪造高数值零损耗或反向刷耐久。
+    /// </summary>
+    public static bool TryGetVanillaHoleCount(string itemId, out int holeCount) {
+        holeCount = itemId switch {
+            "scrapmetal" or "scrapcube" => 16,
+            "scrappanel" => 2,
+            "scraptube" => 6,
+            "woodscraps" or "woodcube" => 10,
+            "woodpanel" => 1,
+            "stick" => 4,
+            "titaniumslab" => 50,
+            "titaniumsheet" => 10,
+            "titaniumrod" => 25,
+            _ => 0,
+        };
+        return holeCount > 0;
+    }
+
+    public static int ResolveClientHoleCountHint(Item item, ushort syncId) {
+        if (PatchCount.TryGetValue(syncId, out int cached) && cached >= 1) {
+            return cached;
+        }
+        if (item != null && TryGetVanillaHoleCount(item.id, out int vanillaCount)) {
+            return vanillaCount;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// 服务端权威解析义肢修补耗材的 <c>holeCount</c>：
+    /// 1. 已知原版耗材强制返回服务端权威常量（忽略客机提示）；
+    /// 2. 服务端已记录 <see cref="PatchCount"/> 的物品优先取缓存值；
+    /// 3. 仅未知第三方模组耗材因 <c>ReliableUnordered</c> 乱序或读档恢复未命中缓存时，回退采用 <c>[1, 64]</c> 截断后的客机提示（上限 64 确保 <c>1/holeCount &gt; 0.0015f</c> 严格正向扣减耐久）。
+    /// </summary>
+    public static int ResolveAuthoritativeHoleCount(Item item, int clientHint) {
+        PruneStaleEntriesIfNeeded();
+        if (item == null) {
+            return 0;
+        }
+        if (TryGetVanillaHoleCount(item.id, out int vanillaCount)) {
+            return vanillaCount;
+        }
+        if (NetObjectRegistry.TryGetSyncInfo(item.gameObject, out SyncInfo si)
+            && si != null
+            && PatchCount.TryGetValue(si.syncId.id, out int cachedCount)
+            && cachedCount >= 1) {
+            return cachedCount;
+        }
+        if (clientHint >= 1) {
+            return Mathf.Clamp(clientHint, 1, MaxModdedHoleCountClamp);
+        }
+        return 0;
+    }
+
+    public static void PruneStaleEntriesIfNeeded() {
+        if (PatchCount.Count <= PruneThreshold) {
+            return;
+        }
+        StaleKeys.Clear();
+        foreach (ushort id in PatchCount.Keys) {
+            if (!NetObjectRegistry.TryGetSyncInfo(id, out SyncInfo si) || si == null || si.IsDestroyed || si.go == null) {
+                StaleKeys.Add(id);
+            }
+        }
+        for (int i = 0; i < StaleKeys.Count; i++) {
+            PatchCount.Remove(StaleKeys[i]);
+        }
+        StaleKeys.Clear();
+    }
 }
 
 /// <summary>
-/// 客户端完成义肢贴片或扳直修复时向服务端发送 <see cref="CustomWireCommands.ProsthesisPatch"/> 同步指令。
+/// 客户端完成义肢贴片或扳直修复时向服务端发送 <see cref="CustomWireCommands.ProsthesisPatch"/> 同步指令（追加第 6 参数兼容旧版 v5.5.3.0 房主）。
 /// </summary>
 [HarmonyPatch(typeof(ProsthesisRepairMinigame), nameof(ProsthesisRepairMinigame.Update))]
 public static class ProsthesisRepairMinigame_Update_MultiplayerPatch {
@@ -214,11 +292,17 @@ public static class ProsthesisRepairMinigame_Update_MultiplayerPatch {
         }
 
         si.SetIgnoreTimeForRoundTrip();
+        int holeHint = ProsthesisRepair_RememberPatchCount.ResolveClientHoleCountHint(Minigame.game.currentItem, si.syncId.id);
+        string msg = holeHint > 0
+            ? string.Format(CultureInfo.InvariantCulture, "{0} {1} {2} {3} {4} {5}", CustomWireCommands.ProsthesisPatch, si.syncId.id, nb.netId.id, Util.GetLimbIndex(limb), flags, holeHint)
+            : string.Format(CultureInfo.InvariantCulture, "{0} {1} {2} {3} {4}", CustomWireCommands.ProsthesisPatch, si.syncId.id, nb.netId.id, Util.GetLimbIndex(limb), flags);
+
         NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
-        writer.Put($"{CustomWireCommands.ProsthesisPatch} {si.syncId.id} {nb.netId.id} {Util.GetLimbIndex(limb)} {flags}");
+        writer.Put(msg);
         Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
     }
 }
+#endif
 
 /// <summary>
 /// 手摇充电器小游戏电量与体力消耗同步补丁。
@@ -442,6 +526,7 @@ internal static class ItemsAndDevicesMinigameReceivers {
         }
     }
 
+#if FULLGAME
     [CTPostInit]
     private static void InitProsthesisPatchCommand() {
         ServerMain.ServerCustomCommandsDict[CustomWireCommands.ProsthesisPatch] = (plr, cmd, args) => {
@@ -470,7 +555,12 @@ internal static class ItemsAndDevicesMinigameReceivers {
             if (limb == null || limb.dismembered || limb.dislocated || !limb.HasProsthetic()) {
                 return;
             }
-            if (!ProsthesisRepair_RememberPatchCount.PatchCount.TryGetValue(itemId, out int holeCount) || holeCount < 1) {
+            int clientHint = 0;
+            if (args.Length >= 6) {
+                int.TryParse(args[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out clientHint);
+            }
+            int holeCount = ProsthesisRepair_RememberPatchCount.ResolveAuthoritativeHoleCount(itemSi.item, clientHint);
+            if (holeCount < 1) {
                 return;
             }
 
@@ -504,6 +594,10 @@ internal static class ItemsAndDevicesMinigameReceivers {
                 return;
             }
 
+            if (itemSi.item.condition <= 0f) {
+                ProsthesisRepair_RememberPatchCount.PatchCount.Remove(itemId);
+            }
+
             itemSi.WriteObjectIntoPacket();
             MedicalSync.Server_QueueSendCharacterHealth(target, true);
             ServerMain.Server_AnnounceSound(target.pos, "prosthesisrepair", ServerMain.GetListOfClientIdsExceptThis(plr.playerId));
@@ -516,6 +610,7 @@ internal static class ItemsAndDevicesMinigameReceivers {
             item.condition = 0f;
         }
     }
+#endif
 
     [ServerReceiver((byte)NetmsgId.SERVER_HandCrankMinigame)]
     private static void Server_HandCrankMinigame(knetid clientId, NetDataReader reader) {

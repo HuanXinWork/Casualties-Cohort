@@ -8,9 +8,8 @@ using UnityEngine;
 namespace KrokV5Optimization;
 
 /// <summary>
-/// stock sim was a 6x6 stamp, and the host renderer's 5x5 still counted past it.
-/// spiders and grabber plants ignored the stamp and stopped when the host chunk renderer turned off, two chunks from the camera.
-/// each player now stamps their chunk plus the eight around it. in mp that union is the only sim test, and the spider and grabber use it too.
+/// 原版模拟网格为 6x6 且叠加房主相机 5x5 渲染区，而蜘蛛、抓人花及其触手/蛛腿 <see cref="IKHandle"/> 仅依赖房主区块渲染器开关，超出房主视距两区块即停更。
+/// 联机下改为每位玩家标记自身周围 3x3 区块并集作为唯一模拟判据，并将 <see cref="SpiderHandler"/>、<see cref="GrabberPlant"/> 与 <see cref="IKHandle"/> 统一接入该范围。
 /// </summary>
 internal static class FixSimRange {
     internal static long Grids;
@@ -75,6 +74,14 @@ internal static class FixSimRange {
     [HarmonyTranspiler]
     static IEnumerable<CodeInstruction> Plant(IEnumerable<CodeInstruction> instructions) {
         return Gate(instructions, "GrabberPlant.Update");
+    }
+
+    // PR #66：蜘蛛腿与抓人花触手的 IKHandle.Update 原版仅检查房主本地 5x5 区块渲染器，
+    // 导致远端客机旁生物移动时房主端 LineRenderer 顶点停留在旧坐标而拉长变形；统一改用 WorldInSimRange 判定。
+    [HarmonyPatch(typeof(IKHandle), "Update")]
+    [HarmonyTranspiler]
+    static IEnumerable<CodeInstruction> IkHandle(IEnumerable<CodeInstruction> instructions) {
+        return Gate(instructions, "IKHandle.Update");
     }
 
     // CHUNKS_VISIBLE_TO_PLAYERS is the bool grid stock already consults.

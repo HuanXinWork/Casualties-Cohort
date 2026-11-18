@@ -427,7 +427,8 @@ internal partial class ItemSync : CasualtiesTogetherSingleton {
             return true;
         if (item.Stats != null && item.Stats.wearable && !item.Stats.usable)
             return false;
-        if (item.id == "bloodbag" || item.id == "bloodbaghuman")
+        // 血袋、手电筒等非零耐久销毁的可复用物品在 condition == 0 时仍具备合法交互（如抽血、开关灯），仅一次性消耗品才视为耗尽（PR #55）
+        if (item.Stats != null && !item.Stats.destroyAtZeroCondition)
             return false;
         return item.condition <= 0.0001f;
     }

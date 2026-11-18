@@ -209,14 +209,29 @@ namespace Together {
                 return;
             }
 
-            Awake_Stage2();
+            try {
+                Awake_Stage2();
+            } catch (Exception e) {
+                ModLog.Exception(LogDomain.Bootstrap, nameof(Awake_Stage2), e);
+                LoadErrorNotifier.errorstr += "\n" + e.ToString();
+                AppendNonAsciiPathHintIfNeeded();
+            }
+
+            // Issue #16 兜底防线：只要存在 Harmony 补丁失败或阶段初始化未完成，确保挂载 LoadErrorNotifier 显露启动错误提示
+            if (_harmonyPatchFailed || (!SUCCESFULLY_INITIALIZED && !string.IsNullOrWhiteSpace(LoadErrorNotifier.errorstr))) {
+                this.GetOrAddComponent<LoadErrorNotifier>();
+                Application.runInBackground = false;
+            }
         }
 
         void _PickUsername() {
             try {
                 if (KSteam.Loaded) {
-                    UIMainMenu.USERINPUT_NAME = KSteam.GetLocalUsername();
-                    return;
+                    string steamName = Multiplayer.SanitizeUnicodeTextInput(KSteam.GetLocalUsername());
+                    if (!string.IsNullOrEmpty(steamName)) {
+                        UIMainMenu.USERINPUT_NAME = steamName;
+                        return;
+                    }
                 }
             } catch (Exception e) {
                 log.LogError("_PickName: " + e.ToString());
@@ -248,15 +263,17 @@ namespace Together {
 
             try {
                 DoHarmonyPatchAll(harmony);
+                if (_harmonyPatchFailed) {
+                    this.GetOrAddComponent<LoadErrorNotifier>();
+                    Application.runInBackground = false;
+                    return;
+                }
             } catch (Exception e) {
                 Together.log.error($"Plugin {MyPluginInfo.PLUGIN_GUID} {Plugin.FULL_MOD_VERSION} failed to load! Make sure you have correct version!\n\n{e}\n");
                 LoadErrorNotifier.errorstr += "\n" + e.ToString();
+                AppendNonAsciiPathHintIfNeeded();
 
-                if (BepInEx.Paths.ExecutablePath.Any(c => c > 127)) {
-                    LoadErrorNotifier.errorstr += $"\n\n{Lang.Get("loaderror_possible_nonascii_path")}\n{BepInEx.Paths.ExecutablePath}\n";
-                }
-
-                this.AddComponent<LoadErrorNotifier>();
+                this.GetOrAddComponent<LoadErrorNotifier>();
                 Application.runInBackground = false;
 
                 return;
@@ -284,7 +301,7 @@ namespace Together {
                 Together.log.error($"{MyPluginInfo.PLUGIN_GUID} {Plugin.FULL_MOD_VERSION} failed to load ASSETS!!!\n\n{e}\n");
                 LoadErrorNotifier.errorstr += "\n" + e.ToString();
 
-                this.AddComponent<LoadErrorNotifier>();
+                this.GetOrAddComponent<LoadErrorNotifier>();
                 return;
             }
 
@@ -299,7 +316,7 @@ namespace Together {
                 Together.log.error($"{MyPluginInfo.PLUGIN_GUID} {Plugin.FULL_MOD_VERSION} failed to load!\n\n{e}\n");
                 LoadErrorNotifier.errorstr += "\n" + e.ToString();
 
-                this.AddComponent<LoadErrorNotifier>();
+                this.GetOrAddComponent<LoadErrorNotifier>();
                 Component.Destroy(mainsingleton);
                 return;
             }
@@ -329,15 +346,48 @@ namespace Together {
             base.StartCoroutine(DelayedDelayedTestGameStartImmidiate());
         }
 
+        private bool _harmonyPatchFailed;
+
+        private static void AppendNonAsciiPathHintIfNeeded() {
+            string exePath = BepInEx.Paths.ExecutablePath;
+            if (!string.IsNullOrEmpty(exePath) && exePath.Any(c => c > 127)) {
+                string hint = Lang.Get("loaderror_possible_nonascii_path");
+                if (LoadErrorNotifier.errorstr == null || !LoadErrorNotifier.errorstr.Contains(exePath, StringComparison.Ordinal)) {
+                    LoadErrorNotifier.errorstr += $"\n\n{hint}\n{exePath}\n";
+                }
+            }
+        }
+
+        /// <summary>
+        /// 逐类应用 Harmony 补丁并汇总失败详情（修复上游 Issue #16：禁止静默吞掉补丁异常导致非 ASCII 游戏路径提示被遮蔽）。
+        /// </summary>
         void DoHarmonyPatchAll(Harmony harmony) {
+            _harmonyPatchFailed = false;
             List<Type> patchTypes = GetHarmonyPatchesInNamespaces("Together", "CasualtiesMultiplayerAPI", "CasualtiesTogetherUtils");
+
+            int failedCount = 0;
+            Type firstFailedType = null;
+            Exception firstException = null;
 
             foreach (Type patch in patchTypes) {
                 try {
                     harmony.PatchAll(patch);
                 } catch (Exception ex) {
-                    log.LogError($"Failed to patch: {patch.Name}: {ex.Message}");
+                    failedCount++;
+                    if (firstException == null) {
+                        firstFailedType = patch;
+                        firstException = ex;
+                    }
+                    ModLog.Exception(LogDomain.Bootstrap, $"DoHarmonyPatchAll({patch.FullName})", ex);
                 }
+            }
+
+            if (failedCount > 0) {
+                _harmonyPatchFailed = true;
+                string summary = $"Harmony failed to apply {failedCount}/{patchTypes.Count} patch group(s). First failure in {firstFailedType?.FullName}:\n{firstException}";
+                Together.log.error($"Plugin {MyPluginInfo.PLUGIN_GUID} {Plugin.FULL_MOD_VERSION} failed to load! Make sure you have correct version!\n\n{summary}\n");
+                LoadErrorNotifier.errorstr += "\n" + summary;
+                AppendNonAsciiPathHintIfNeeded();
             }
         }
 

@@ -173,6 +173,8 @@ namespace Together {
 
             lastUpdateTick = (ushort)(Net.ServerTick - 1);
             useIgnoreArmed = false;
+            pendingAcks = 0;
+            pendingAckDeadline = 0f;
             if (Net.IsServer && go != null && container != null) {
                 KrokV5Optimization.FixInvSync.NoteContainerVersion(Id, Version);
             }
@@ -200,9 +202,20 @@ namespace Together {
         private void OnTransformUpdate() {
         }
 
+        /// <summary>
+        /// 当 <see cref="SyncInfo"/> 实体被销毁时触发（携带 <c>syncId.id</c>），供义肢修补缓存或预测状态表安全回收条目。
+        /// </summary>
+        internal static event Action<ushort> OnSyncInfoDestroyed;
+
         protected override void OnDestroy() {
             if (NetObjectRegistry.NetIdToSyncInfoDict.TryGetValue(Id, out SyncInfo listed) && ReferenceEquals(listed, this)) {
                 NetObjectRegistry.NetIdToSyncInfoDict.Remove(Id);
+            }
+            CombatItemUseSync.ClearHeldState(syncId.id);
+            try {
+                OnSyncInfoDestroyed?.Invoke(syncId.id);
+            } catch (Exception e) {
+                ModLog.Exception(LogDomain.ObjectSync, $"SyncInfo.OnDestroy event {this}", e);
             }
             DestroyTrackedGameObject();
         }
@@ -309,39 +322,79 @@ namespace Together {
             }
         }
 
-        public Container container => go.GetComponent<Container>();
-        public BuildingEntity building => go.GetComponent<BuildingEntity>();
-        public TraderScript trader => go.GetComponent<TraderScript>();
-        public SpiderHandler spider => go.GetComponent<SpiderHandler>();
-        public GunScript gun => go.GetComponent<GunScript>();
-        public AmmoScript ammo => go.GetComponent<AmmoScript>();
-        public WaterContainerItem liquidcontainer => go.GetComponent<WaterContainerItem>();
+        // 客户端入图等待 CreateObject / NullGoRetryDelay 期间 go 可能暂为 null（Issue #50）：所有组件查询必须前置判空，杜绝异步中继包触发 NRE
+        public Container container => go != null ? go.GetComponent<Container>() : null;
+        public BuildingEntity building => go != null ? go.GetComponent<BuildingEntity>() : null;
+        public TraderScript trader => go != null ? go.GetComponent<TraderScript>() : null;
+        public SpiderHandler spider => go != null ? go.GetComponent<SpiderHandler>() : null;
+        public GunScript gun => go != null ? go.GetComponent<GunScript>() : null;
+        public AmmoScript ammo => go != null ? go.GetComponent<AmmoScript>() : null;
+        public WaterContainerItem liquidcontainer => go != null ? go.GetComponent<WaterContainerItem>() : null;
 
 #if DEBUG
         public double deleted_time;
         public bool is_deleted;
 #endif
 
-        public bool IsItem() => go.GetComponent<Item>() != null;
-        public bool CanBeUsedToAmputate() => IsItem() && Item_DoAmputate_MultiplayerPatch.ItemsThatCanAmputate.Contains(item.id);
+        public bool IsItem() => go != null && go.GetComponent<Item>() != null;
+        public bool CanBeUsedToAmputate() => IsItem() && item != null && Item_DoAmputate_MultiplayerPatch.ItemsThatCanAmputate.Contains(item.id);
         public bool IsContainer() => container != null;
-        public bool IsBuilding() => go.GetComponent<BuildingEntity>() != null;
-        public bool IsTrader() => go.GetComponent<BuildingEntity>() && trader != null;
+        public bool IsBuilding() => go != null && go.GetComponent<BuildingEntity>() != null;
+        public bool IsTrader() => IsBuilding() && trader != null;
         public bool IsGun() => gun != null;
         public bool IsAmmo() => ammo != null;
         public bool IsLiquidContainer() => liquidcontainer != null;
         public bool IsSpider() => spider != null;
-        public bool IsAED() => IsItem() && item.IsAED();
-        public bool IsManualDefibrillator() => IsItem() && item.IsManualDefibrillator();
+        public bool IsAED() => IsItem() && item != null && item.IsAED();
+        public bool IsManualDefibrillator() => IsItem() && item != null && item.IsManualDefibrillator();
 
         private const int MaxIgnoreLead = 16384;
+        private int pendingAcks;
+        private float pendingAckDeadline;
 
         public void ArmPredictedUse() {
+            // 每次实际发出的使用请求都必须独立计入待确认深度；但旧版窗口下维持 useIgnoreArmed 防空体力连点无限顺延 tick 截止期
+            AwaitServerAck();
             if (useIgnoreArmed) {
                 return;
             }
             useIgnoreArmed = true;
             SetIgnoreTimeForRoundTrip();
+        }
+
+        /// <summary>
+        /// 客户端等待服务端 <c>use_ack</c> 确认（PR #61）：仅在 <see cref="UseAck.ServerSupportsUseAck"/> 协商通过时启用自适应锁，
+        /// 连入未发探针的旧版 <c>v5.5.3.0</c> 房主时自动回退至 <see cref="SetIgnoreTimeForRoundTrip"/> 短窗口，避免卡死 7.5 秒。
+        /// </summary>
+        public void AwaitServerAck() {
+            if (!Net.IsRunning || !Net.IsClient) {
+                return;
+            }
+            if (!UseAck.ServerSupportsUseAck) {
+                if (!useIgnoreArmed) {
+                    SetIgnoreTimeForRoundTrip();
+                }
+                return;
+            }
+            float rtt = Mathf.Max(0f, ClientMain.RTT_IN_SECONDS_with_margin);
+            float wait = 1.5f + Mathf.Min(rtt * 2f, 6f);
+            pendingAcks++;
+            pendingAckDeadline = Mathf.Max(pendingAckDeadline, Time.realtimeSinceStartup + wait);
+        }
+
+        internal void OnServerAck() {
+            if (pendingAcks <= 0) {
+                return;
+            }
+            pendingAcks--;
+            if (pendingAcks > 0) {
+                return;
+            }
+            useIgnoreArmed = false;
+            // 服务端裁决已落定，但携带最新权威状态的 LES 快照可能比可靠通道的 use_ack 晚到 1~2 个发送周期；保留 0.25s（至少 2 ticks）短尾缓冲并同步收敛手电预测锁
+            int span = Mathf.Max(2, (int)(0.25f * Net.ServerEntitySendRate));
+            lastUpdateTick = (ushort)(Net.ServerTick + span);
+            CombatItemUseSync.OnServerAck(syncId.id);
         }
 
         public void SetIgnoreTimeForRoundTrip(float additional_time_seconds = 0.3f) {
@@ -355,6 +408,12 @@ namespace Together {
         }
 
         public bool IsIgnored() {
+            if (pendingAcks > 0) {
+                if (UseAck.ServerSupportsUseAck && Time.realtimeSinceStartup < pendingAckDeadline) {
+                    return true;
+                }
+                pendingAcks = 0;
+            }
             int lead = LiteEntitySystem.Utils.SequenceDiff(lastUpdateTick, Net.ServerTick);
             return lead >= 0 && lead <= MaxIgnoreLead;
         }

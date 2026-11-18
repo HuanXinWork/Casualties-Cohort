@@ -51,21 +51,38 @@ public static class Body_WearWearable_MultiplayerPatch {
 
 [HarmonyPatch(typeof(Body), nameof(Body.SwapSlots))]
 static class Body_SwapSlots_MultiplayerPatch {
-    static void Prefix() {
+    static void Prefix(out bool __state) {
+        __state = false;
         if (!Net.IsRunning)
             return;
         MoveCommit.Push();
+        __state = true;
     }
 
-    static void Postfix(Body __instance, int slot1, int slot2) {
-        if (!Net.IsRunning)
+    static void Postfix(Body __instance, int slot1, int slot2, ref bool __state) {
+        if (!__state)
             return;
-        if (!__instance.IsBodyLocal()) {
+        if (__instance == null || !__instance.IsBodyLocal()) {
+            __state = false;
             MoveCommit.Pop();
             return;
         }
         ItemSync.RecordAndApplyInvState(Util.GetLocalBody());
+        __state = false;
         MoveCommit.EndSwap(__instance, slot1, slot2);
+    }
+
+    // Issue #64：当槽位互换期间（含第三方模组回调）抛出未捕获异常时 Harmony 跳过 Postfix，必须由 Finalizer 精确回退本次压入的 _depth 栈深
+    static void Finalizer(Body __instance, Exception __exception, ref bool __state) {
+        if (!__state)
+            return;
+        __state = false;
+        if (__exception != null) {
+            if (__instance != null && __instance.IsBodyLocal())
+                MoveCommit.EndDrag(null);
+            else
+                MoveCommit.Pop();
+        }
     }
 }
 
@@ -183,6 +200,12 @@ public static class PlayerCamera_TryPerformInventoryAction_MultiplayerPatch {
 
     static void Postfix() {
         is_inside_TryPerformInventoryAction = false;
+    }
+
+    static void Finalizer(Exception __exception) {
+        if (__exception != null) {
+            is_inside_TryPerformInventoryAction = false;
+        }
     }
 
     static bool MovedInto(Container dest, Item item) {
@@ -491,21 +514,37 @@ public static class LiquidTransfer_Finish_MultiplayerPatch {
 
 [HarmonyPatch(typeof(Body), nameof(Body.SwitchHands))]
 static class Body_SwitchHands_MultiplayerPatch {
-    static void Prefix() {
+    static void Prefix(out bool __state) {
+        __state = false;
         if (!Net.IsRunning)
             return;
         MoveCommit.Push();
+        __state = true;
     }
 
-    static void Postfix(Body __instance) {
-        if (!Net.IsRunning)
+    static void Postfix(Body __instance, ref bool __state) {
+        if (!__state)
             return;
-        if (!__instance.IsBodyLocal()) {
+        if (__instance == null || !__instance.IsBodyLocal()) {
+            __state = false;
             MoveCommit.Pop();
             return;
         }
         ItemSync.RecordAndApplyInvState(Util.GetLocalBody());
+        __state = false;
         MoveCommit.EndHands(__instance);
+    }
+
+    static void Finalizer(Body __instance, Exception __exception, ref bool __state) {
+        if (!__state)
+            return;
+        __state = false;
+        if (__exception != null) {
+            if (__instance != null && __instance.IsBodyLocal())
+                MoveCommit.EndDrag(null);
+            else
+                MoveCommit.Pop();
+        }
     }
 }
 
@@ -591,6 +630,7 @@ static class Body_DropItem_MultiplayerPatch {
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.HandleReleaseDragging))]
 public static class PlayerCamera_HandleReleaseDragging_MultiplayerPatch {
     static ItemSync.ItemsContainerInfo last_ici = null;
+    static int _pushedDragDepth = 0;
 
     public static void Prefix(PlayerCamera __instance, ref SyncInfo __state) {
         __state = null;
@@ -598,6 +638,7 @@ public static class PlayerCamera_HandleReleaseDragging_MultiplayerPatch {
             return;
 
         MoveCommit.Push();
+        _pushedDragDepth++;
         if (__instance.dragItem) {
             if (ItemSync.TryGetSyncInfo(__instance.dragItem, out var si)) {
                 last_ici = ItemSync.ItemGetContainerInfo(__instance.dragItem);
@@ -609,6 +650,9 @@ public static class PlayerCamera_HandleReleaseDragging_MultiplayerPatch {
     }
 
     public static void Postfix(ref SyncInfo __state) {
+        if (_pushedDragDepth <= 0)
+            return;
+
         if (__state != null) {
             ItemSync.ItemsContainerInfo newIci = ItemSync.ItemGetContainerInfo(__state.item);
             if (newIci.JustContainerChanged(last_ici) && newIci.inv_slot == null) {
@@ -618,8 +662,21 @@ public static class PlayerCamera_HandleReleaseDragging_MultiplayerPatch {
                 ItemSync.RememberPickupBag(__state.syncId, last_ici.container);
             else
                 ItemSync.RememberPickupBag(__state.syncId, null);
+            last_ici = null;
+            _pushedDragDepth--;
             MoveCommit.EndDrag(__state.item);
-        } else if (Net.IsRunning) {
+        } else {
+            last_ici = null;
+            _pushedDragDepth--;
+            MoveCommit.EndDrag(null);
+        }
+    }
+
+    // Issue #64：拖拽释放到轮盘调用 useAction（如未配全的第三方模组物品）抛异常会跳过 Postfix，导致 MoveCommit._depth >= 1 永久锁死客户端全部拾取/装包
+    public static void Finalizer(Exception __exception) {
+        if (__exception != null && _pushedDragDepth > 0) {
+            last_ici = null;
+            _pushedDragDepth--;
             MoveCommit.EndDrag(null);
         }
     }

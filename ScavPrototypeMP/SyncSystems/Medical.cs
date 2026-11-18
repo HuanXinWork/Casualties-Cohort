@@ -478,15 +478,18 @@ internal class MedicalSync : CasualtiesTogetherSingleton {
         ScavPlayer healer = caller.Player;
         NetBody healerNb = caller.NetBody;
 
-        // Release 与 Debug 双构建统一校验施救者与目标角色距离（移除原版仅在 !RELEASE 生效的编译门控）
+        // 对齐 Server_CheckCanHealerUseItemForLimb 的交互容差半径（9f * 2.5f = 22.5f，对应 PR #60/#58）：
+        // 此前此处使用 ServerExchangeToleranceDistance（20f），导致 20~22.5 距离区间内客机本地可正常打开医疗/义肢修补小游戏，
+        // 但服务端拒收初始 ApplyWoundItem 包从而漏记状态并引发修补回滚；Release 与 Debug 双构建统一强制校验。
+        float maxInteractDist = SharedMain.max_player_interaction_distance * 2.5f;
         if (healerNb != targetNb
-            && !KM.DistanceCheck(caller.Body, targetNb.body, GameplayRanges.ServerExchangeToleranceDistance)) {
+            && !KM.DistanceCheck(caller.Body, targetNb.body, maxInteractDist)) {
             MpCommsTrace.HostRejected(LogDomain.Medical, clientId.id, (byte)NetmsgId.SERVER_PlayerCamera_ApplyWoundItem, itemSyncId.id, "TargetTooFar");
             ModLog.Warn($"拒绝远程医疗请求（超出交互距离）: {healer} -> {targetLimb}, item={isi}", LogDomain.Medical);
             return;
         }
 
-        if (!ItemSync.CheckIfBodyReachThisItem(isi, caller.Body, GameplayRanges.ServerExchangeToleranceDistance, true)) {
+        if (!ItemSync.CheckIfBodyReachThisItem(isi, caller.Body, maxInteractDist, true)) {
             MpCommsTrace.HostRejected(LogDomain.Medical, clientId.id, (byte)NetmsgId.SERVER_PlayerCamera_ApplyWoundItem, itemSyncId.id, "ItemUnreachable");
             ModLog.Warn($"拒绝远程医疗请求（物品不可达）: {healer} -> {targetLimb}, item={isi}", LogDomain.Medical);
             return;

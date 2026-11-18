@@ -66,7 +66,32 @@ public partial class Multiplayer : MonoBehaviour {
 
     public static bool verbose => DebugMenuSettings.is_verbose;
     public const int CONST_MAX_POSSIBLE_PLAYER_COUNT = 200;
-    public const int MAX_NAME_LENGTH = 16;
+    public const int MAX_NAME_LENGTH = 24;
+    public const int LEGACY_ASCII_MAX_NAME_LENGTH = 16;
+
+    /// <summary>
+    /// 本地玩家的权威期望昵称（支持中文/西里尔等 Unicode 字符）。
+    /// 避免直接调用 <c>KSteam.SessionName()</c> 导致含混合字符的 Steam 昵称被旧版 ASCII 正则截断污染 <c>UIMainMenu.USERINPUT_NAME</c>。
+    /// </summary>
+    public static string PLAYER_USERNAME {
+        get {
+            if ((Plugin.plrname_override || ExplicitSessionName) && !string.IsNullOrEmpty(UIMainMenu.USERINPUT_NAME)) {
+                return SanitizeUnicodeTextInput(UIMainMenu.USERINPUT_NAME);
+            }
+            if (KSteam.Loaded) {
+                string live = KSteam.GetLocalUsername();
+                if (!string.IsNullOrEmpty(live) && live != "[unknown]") {
+                    string clean = SanitizeUnicodeTextInput(live);
+                    if (!string.IsNullOrEmpty(clean)) {
+                        UIMainMenu.USERINPUT_NAME = clean;
+                        return clean;
+                    }
+                }
+            }
+            string fallback = SanitizeUnicodeTextInput(UIMainMenu.USERINPUT_NAME);
+            return !string.IsNullOrEmpty(fallback) ? fallback : "Player";
+        }
+    }
 
     internal static byte PLAYER_COUNT_LIMIT {
         get { return rules.PLAYER_COUNT_LIMIT; }
@@ -281,11 +306,138 @@ public partial class Multiplayer : MonoBehaviour {
     }
 
     public static string SanitizeTextInputAllowSpaces(string s) {
+        if (string.IsNullOrEmpty(s)) {
+            return string.Empty;
+        }
         return Regex.Replace(s, "[^a-zA-Z0-9_#$()+=\\- ]", "").TrimStart();
     }
 
+    /// <summary>
+    /// 原版 <c>v5.5.3.0</c> 纯 ASCII 输入清洗契约（保留供跨版本握手安全名构建与协议兼容校验使用，严禁放宽字符集）。
+    /// </summary>
     public static string SanitizeTextInput(string s) {
+        if (string.IsNullOrEmpty(s)) {
+            return string.Empty;
+        }
         return Regex.Replace(s, "[^a-zA-Z0-9_#$()+=-]", "");
+    }
+
+    /// <summary>
+    /// 清洗玩家昵称等单行无空格 Unicode 文本（Issue #40 / #35）：
+    /// 剔除控制字符与富文本尖括号 <c>'&lt;'</c>、<c>'&gt;'</c>，允许全部 Unicode 字母/数字（中文、俄文、日韩文等）及常用安全符号，默认截断至 24 字符。
+    /// </summary>
+    public static string SanitizeUnicodeTextInput(string s, int maxLength = MAX_NAME_LENGTH) {
+        return SanitizeUnicodeCore(s, allowSpaces: false, maxLength: maxLength);
+    }
+
+    /// <summary>
+    /// 清洗允许空格的 Unicode 文本（如房间名）：额外保留空格并去除前导空格，按 <paramref name="maxLength"/> 截断。
+    /// </summary>
+    public static string SanitizeUnicodeTextInputAllowSpaces(string s, int maxLength = MAX_NAME_LENGTH) {
+        return SanitizeUnicodeCore(s, allowSpaces: true, maxLength: maxLength);
+    }
+
+    private static string SanitizeUnicodeCore(string s, bool allowSpaces, int maxLength) {
+        if (string.IsNullOrEmpty(s) || maxLength <= 0) {
+            return string.Empty;
+        }
+
+        StringBuilder sb = new StringBuilder(Math.Min(s.Length, maxLength));
+        for (int i = 0; i < s.Length; i++) {
+            char c = s[i];
+            if (char.IsControl(c) || c == '<' || c == '>') {
+                continue;
+            }
+            if (allowSpaces && c == ' ') {
+                if (sb.Length == 0) {
+                    continue; // 等价于 TrimStart(' ')，确保截断前先剥离前导空格
+                }
+                sb.Append(c);
+            } else if (IsAllowedUnicodeNameSymbol(c)) {
+                sb.Append(c);
+            }
+
+            if (sb.Length >= maxLength) {
+                break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static bool IsAllowedUnicodeNameSymbol(char c) {
+        if (char.IsLetterOrDigit(c)) {
+            return true;
+        }
+        return c == '_' || c == '#' || c == '$' || c == '(' || c == ')'
+            || c == '+' || c == '=' || c == '-' || c == '.';
+    }
+
+    /// <summary>
+    /// 判断字符串是否包含任意非 ASCII 字符（码点 &gt; 127）。
+    /// </summary>
+    public static bool ContainsNonAscii(string s) {
+        if (string.IsNullOrEmpty(s)) {
+            return false;
+        }
+        for (int i = 0; i < s.Length; i++) {
+            if (s[i] > 127) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 校验清洗前后的玩家昵称合法性：含非 ASCII 字符（如 1~2 字中文名）允许 <c>Length &gt;= 1</c>，纯 ASCII 仍保持原版 <c>Length &gt;= 3</c>。
+    /// </summary>
+    public static bool IsValidPlayerName(string name, out string denyReason) {
+        if (string.IsNullOrEmpty(name)) {
+            denyReason = "Name too short.";
+            return false;
+        }
+        string sanitized = SanitizeUnicodeTextInput(name);
+        if (!string.Equals(name, sanitized, StringComparison.Ordinal)) {
+            denyReason = "Invalid Name.";
+            return false;
+        }
+        int minLen = ContainsNonAscii(name) ? 1 : 3;
+        if (name.Length < minLen) {
+            denyReason = "Name too short.";
+            return false;
+        }
+        denyReason = null;
+        return true;
+    }
+
+    /// <summary>
+    /// 构建 100% 兼容 Steam 原版 <c>v5.5.3.0</c> 房主握手校验（<c>SanitizeTextInput(name) == name &amp;&amp; Length &gt;= 3</c>）的确定性 ASCII 握手名。
+    /// 若原始名字本身即为合法原版 ASCII 名（3..16 字符），原样返回；否则提取合法 ASCII 前缀拼接 <c>"Plr_"</c> 与 4 位无符号稳定哈希十六进制。
+    /// </summary>
+    public static string BuildAsciiHandshakeSafeName(string rawName) {
+        string clean = SanitizeUnicodeTextInput(rawName);
+        if (!string.IsNullOrEmpty(clean)
+            && clean.Length >= 3
+            && clean.Length <= LEGACY_ASCII_MAX_NAME_LENGTH
+            && string.Equals(clean, SanitizeTextInput(clean), StringComparison.Ordinal)) {
+            return clean;
+        }
+
+        string hashSource = !string.IsNullOrEmpty(clean) ? clean : (rawName ?? string.Empty);
+        string asciiPrefix = SanitizeTextInput(hashSource);
+        if (asciiPrefix.Length > 11) {
+            asciiPrefix = asciiPrefix.Substring(0, 11);
+        }
+
+        uint stableHash = (uint)hashSource.StableHash();
+        string hex4 = (stableHash & 0xFFFFu).ToString("X4");
+        string safeName = string.IsNullOrEmpty(asciiPrefix)
+            ? ("Plr_" + hex4)
+            : (asciiPrefix + "_Plr_" + hex4);
+
+        if (safeName.Length > MAX_NAME_LENGTH) {
+            safeName = safeName.Substring(0, MAX_NAME_LENGTH);
+        }
+        return safeName;
     }
 
     public static string SanitizeRichText(string s) {

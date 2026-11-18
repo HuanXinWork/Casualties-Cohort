@@ -56,6 +56,13 @@ namespace Together.MpConstants {
         public const string LayerContinue = "layer_continue";
         public const string LayerSave = "layer_save";
 
+        // 零线协议破坏扩展命令键（旧版 v5.5.3.0 对未知 CustomCommand 键静默忽略，保障三版本混连 100% 兼容）
+        public const string UseAck = "use_ack";
+        public const string NonDescSync = "nondesc_sync";
+        public const string NonDescReq = "nondesc_req";
+        public const string StimSync = "stim_sync";
+        public const string UnicodeName = "unicode_name";
+
         // Fullgame 终局与剧情同步命令键
         public const string AscentGo = "ascent_go";
         public const string BlueHeartRemoved = "blueheartremoved";

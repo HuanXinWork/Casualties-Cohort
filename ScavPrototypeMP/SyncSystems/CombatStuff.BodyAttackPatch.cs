@@ -206,6 +206,11 @@ public static class Body_Attack_MultiplayerPatch {
         MeleeCombatSync.LastAttackResult = __result;
         StaticHitValidation = false;
         breakTheAttackLoop = false;
+        // Issue #62: 当手持近战工具开启 Headpat 抚摸并左键点击时，HeadpatSession.BlockAttack.Prefix 返回 false 短路 Body.Attack，
+        // 导致本补丁 Prefix 被跳过、引用类型 __state 保持为 null，而 Harmony 仍会执行 Postfix；此处提前返回以防解引用崩溃。
+        if (__state == null) {
+            return;
+        }
 
         bool attackerIsLocal = Util.IsBodyLocal(__instance);
         if (!attackerIsLocal) {

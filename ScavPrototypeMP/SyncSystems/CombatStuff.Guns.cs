@@ -429,7 +429,22 @@ internal static class GunCombatSync {
     }
 
     static void ReplayRemoteGunshotVisuals(SyncInfo gunSi, Vector2 gunBarrelOrigin, Vector2 gunBarrelDirection) {
-        var gun = gunSi.gun;
+        var gun = gunSi != null ? gunSi.gun : null;
+        if (gun == null || gunSi.go == null) {
+            return;
+        }
+        // Issue #50: 远端枪械刚从容器/背槽切出或同帧实例化尚未执行 GunScript.Start() 时，私有引用 it 与 render 仍为 null；
+        // 必须在此惰性补齐，否则下方 gun.Update() -> Fire() 在扣减 it.condition 或刷新 render.sprite 时会抛 NRE 并吞掉枪声与弹道。
+        if (gun.it == null) {
+            gun.it = gun.GetComponent<Item>();
+        }
+        if (gun.render == null) {
+            gun.render = gun.GetComponent<SpriteRenderer>();
+        }
+        if (gun.it == null || gun.render == null) {
+            return;
+        }
+
         var gst = gunSi.go.GetOrAddComponent<TrackerGunScript>();
 
         gst.override_shoot_trajectory = true;

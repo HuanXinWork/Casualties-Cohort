@@ -613,6 +613,9 @@ namespace Together {
             }
 
             if (item.TryGetComponent(out GunScript gun)) {
+                // Issue #50: 原版 GunScript.Update() 每帧对比 lastRacked 与 racked 判定拉栓/复位边沿；
+                // 若仅更新 racked 而不对齐 lastRacked，客机将误触发拉栓抛壳/播音效或擅自推弹入膛扣减 roundsInMag。
+                gun.lastRacked = gun_racked;
                 gun.racked = gun_racked;
                 gun.safe = gun_safe;
                 gun.hasMag = gun_hasMag;
@@ -622,6 +625,9 @@ namespace Together {
                 gun.roundsInMag = rounds;
             } else if (item.TryGetComponent(out AmmoScript ammo)) {
                 ammo.rounds = rounds;
+            } else if (Net.IsClient && item.TryGetComponent(out NonDescriptCan nonDescCan)) {
+                // PR #48: 罐头可能一经生成便装入休眠容器而尚未跑过 Start()，在首次绑定 SyncInfo 应用状态时即触发拉取权威数值。
+                NonDescriptCanSync.EnsureClientSynced(nonDescCan, syncId);
             }
         }
 

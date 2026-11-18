@@ -12,6 +12,10 @@ namespace Together;
 /// 手持消耗品与手电筒开关的客户端预测锁及服务端使用校验同步（独立于 <see cref="HarmonyPatch"/> 类以避免分析器误判）。
 /// </summary>
 internal static class CombatItemUseSync {
+    private const float LegacyHoldDurationSeconds = 2f;
+    private const float AckHoldMaxDurationSeconds = 7.5f;
+    private const float AckTailHoldDurationSeconds = 0.35f;
+
     private struct StateHold {
         public byte state;
         public float until;
@@ -27,10 +31,31 @@ internal static class CombatItemUseSync {
     }
 
     internal static void HoldState(ushort id, byte state) {
+        // 支持 UseAck 的新版房主下延长至 7.5s 并在收到 use_ack 时收敛为 0.35s；连旧版 v5.5.3.0 房主时保持原 2s 短窗口
+        HoldState(id, state, UseAck.ServerSupportsUseAck ? AckHoldMaxDurationSeconds : LegacyHoldDurationSeconds);
+    }
+
+    internal static void HoldState(ushort id, byte state, float durationSeconds) {
         if (id == 0) {
             return;
         }
-        StateHolds[id] = new StateHold { state = state, until = Time.realtimeSinceStartup + 2f };
+        StateHolds[id] = new StateHold { state = state, until = Time.realtimeSinceStartup + durationSeconds };
+    }
+
+    internal static void OnServerAck(ushort id) {
+        if (id == 0 || !StateHolds.TryGetValue(id, out StateHold hold)) {
+            return;
+        }
+        float now = Time.realtimeSinceStartup;
+        if (now >= hold.until) {
+            StateHolds.Remove(id);
+            return;
+        }
+        float tailUntil = now + AckTailHoldDurationSeconds;
+        if (tailUntil < hold.until) {
+            hold.until = tailUntil;
+            StateHolds[id] = hold;
+        }
     }
 
     internal static bool HeldState(ushort id, out byte state) {
@@ -50,6 +75,10 @@ internal static class CombatItemUseSync {
         if (id != 0) {
             StateHolds.Remove(id);
         }
+    }
+
+    internal static void ClearAllHeldStates() {
+        StateHolds.Clear();
     }
 
     internal static void AnnouncePredictedUse(ushort itemId, knetid bodyNet) {
@@ -90,6 +119,7 @@ internal static class CombatItemUseSync {
             || !NetObjectRegistry.TryGetSyncInfo(item, out var si)
             || si.go == null
             || !si.IsItem()) {
+            UseAck.Send(clientId, item);
             return;
         }
 
@@ -102,6 +132,7 @@ internal static class CombatItemUseSync {
 
         if (!allowed) {
             log.serverdeny($"RequestUseItem {giverPlr} -> {targetNb} - {si}", Vector2.Lerp(giverPlr.body.transform.position, targetNb.position, 0.5f));
+            UseAck.Send(clientId, item);
             return;
         }
 
@@ -134,27 +165,36 @@ internal static class CombatItemUseSync {
                     ? "plrint_feed_receive_food"
                     : (si.item.Stats.category == "water" ? "plrint_feed_receive_water" : "plrint_useitem"));
 
+            // ConsentForFeeding 为异步弹窗：严禁在弹出瞬间提前发 use_ack（否则物品会在等待对方确认期间被旧快照回滚），必须在玩家应答落定后再发
             ServerMain.PromptPlayer(
                 targetNb.plr,
                 "FEED_OFFER",
                 $"<body:{giver.netId}> <key:plrint_feed_prompt>",
                 $"<key:{actionKey}> \"<item:{si.syncId}>\"",
                 answer => {
-                    if (answer == 0) {
-                        if (si.go == null) {
-                            giverPlr.Server_DoAlertSingle($"<bodyc:{targetNb.netId}> <key:giveitem_noitem>.");
-                            return;
+                    try {
+                        if (answer == 0) {
+                            if (si.go == null) {
+                                giverPlr.Server_DoAlertSingle($"<bodyc:{targetNb.netId}> <key:giveitem_noitem>.");
+                                return;
+                            }
+                            if (ItemSync.ConfirmItemOffer(giver, targetNb, si.item)) {
+                                ExecuteUseItem();
+                                giverPlr.Server_DoAlertSingle($"<bodyc:{targetNb.netId}> <key:accepted>.");
+                            }
+                        } else {
+                            giverPlr.Server_DoAlertSingle($"<bodyc:{targetNb.netId}> <key:declined>.");
                         }
-                        if (ItemSync.ConfirmItemOffer(giver, targetNb, si.item)) {
-                            ExecuteUseItem();
-                            giverPlr.Server_DoAlertSingle($"<bodyc:{targetNb.netId}> <key:accepted>.");
-                        }
-                    } else {
-                        giverPlr.Server_DoAlertSingle($"<bodyc:{targetNb.netId}> <key:declined>.");
+                    } finally {
+                        UseAck.Send(clientId, item);
                     }
                 });
         } else {
-            ExecuteUseItem();
+            try {
+                ExecuteUseItem();
+            } finally {
+                UseAck.Send(clientId, item);
+            }
         }
     }
 
@@ -179,7 +219,8 @@ internal static class CombatItemUseSync {
 
         if (lightState != 255 && si.item is not null && si.item.TryGetComponent(out CustomItemBehaviour light)) {
             light.state = lightState;
-            HoldState(si.syncId, lightState);
+            // 旁观客机不会收到单播给发起者的 use_ack，此处固定使用 2s 短缓冲屏蔽在途旧快照即可
+            HoldState(si.syncId, lightState, LegacyHoldDurationSeconds);
             Sound.Play("flashlighttoggle", si.item.transform.position);
         } else {
             ItemSync.BetterUseItem(targetNb.body, si.item);

@@ -1,4 +1,3 @@
-
 using CasualtiesTogetherUtils;
 using Newtonsoft.Json;
 using System;
@@ -6,21 +5,14 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Together.Diagnostics;
 using Unity.VisualScripting;
 
 namespace Together;
 
-
-
-
-
-
-
 public static class Lang {
 
-
-    internal static Dictionary<string, string> EN = new Dictionary<string, string>{
-
+    internal static Dictionary<string, string> EN = new Dictionary<string, string> {
     };
 
     internal static Dictionary<string, Dictionary<string, string>> dict = new Dictionary<string, Dictionary<string, string>> {
@@ -29,7 +21,6 @@ public static class Lang {
 
     static HashSet<string> failed = new();
 
-
     internal static string GetEN(string key) {
         if (EN.TryGetValue(key, out var value))
             return value;
@@ -37,12 +28,68 @@ public static class Lang {
     }
 
     internal const string LocalPrefixTag = "casualtiestogether_";
+    internal const string RussianLocaleKey = "RU";
+
+    private static string _ruCachedLocale;
+    private static object _ruCachedLangPack;
+    private static bool _ruCachedResult;
+    private static string _ruLoggedLocale;
+
+    /// <summary>
+    /// 自动识别游戏当前是否处于俄语本地化环境（合入上游 PR #63）：
+    /// 依次按语言标识符（<c>ru*</c> / <c>*russ*</c> / 含西里尔字符）及当前语言包的 <c>"layer"</c> 词条西里尔字符采样判定，并缓存判定结果。
+    /// </summary>
+    internal static bool IsRussianLocale(string locale) {
+        if (string.IsNullOrEmpty(locale)) {
+            return false;
+        }
+
+        var currentPack = Locale.currentLang;
+        if (locale == _ruCachedLocale && ReferenceEquals(currentPack, _ruCachedLangPack)) {
+            return _ruCachedResult;
+        }
+
+        bool isRu = locale.StartsWith("ru", StringComparison.OrdinalIgnoreCase)
+                 || locale.IndexOf("russ", StringComparison.OrdinalIgnoreCase) >= 0
+                 || ContainsCyrillic(locale);
+
+        if (!isRu) {
+            if (currentPack == null || currentPack.other == null) {
+                return false;
+            }
+            if (currentPack.other.TryGetValue("layer", out string sample) && !string.IsNullOrEmpty(sample)) {
+                isRu = ContainsCyrillic(sample);
+            }
+        }
+
+        _ruCachedLocale = locale;
+        _ruCachedLangPack = currentPack;
+        _ruCachedResult = isRu;
+
+        if (isRu && _ruLoggedLocale != locale) {
+            _ruLoggedLocale = locale;
+            ModLog.Info(LogDomain.Bootstrap, $"Lang: language '{locale}' detected as Russian, using embedded RU translation.");
+        }
+        return isRu;
+    }
+
+    private static bool ContainsCyrillic(string text) {
+        for (int i = 0; i < text.Length; i++) {
+            char c = text[i];
+            if (c >= '\u0400' && c <= '\u04FF') {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static string Get(in string key, in bool allow_null_result = false) {
 
         string result = null;
         var locale = Locale.currentLangName ?? "EN";
+        var lookupLocale = IsRussianLocale(locale) ? RussianLocaleKey : locale;
 
-        if (dict.TryGetValue(locale, out var lang))
+        if (dict.TryGetValue(lookupLocale, out var lang))
             if (lang.TryGetValue(key, out result) && String.IsNullOrEmpty(result))
                 result = null;
 
@@ -274,7 +321,6 @@ public static class Lang {
 #if DEBUG
     [CTPostInit]
     static void RegisterDebugCommands() {
-
         Con.RegisterCommandModern("testspooflang", "DEBUG MP - Spoof Locale.currentLangName", (split, comm) => {
             Locale.currentLangName = split[1];
             log.l("testspooflang", Locale.currentLangName);
@@ -282,23 +328,3 @@ public static class Lang {
     }
 #endif
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

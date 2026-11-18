@@ -17,7 +17,10 @@ public partial class Multiplayer {
 
         credentials_buffer.Put(GAME_FILES_HASH);
         credentials_buffer.Put(FULL_VERSION_TAG, true);
-        credentials_buffer.Put(KSteam.SessionName(), true);
+        // 握手包 userName 字段始终写入兼容原版 v5.5.3.0 房主 ASCII 校验的确定性安全名；
+        // 若本地真实昵称含中文/西里尔等字符，入服后由 UnicodeFontFallback 通过 CustomCommand "unicode_name" 无缝升级。
+        string handshakeSafeName = BuildAsciiHandshakeSafeName(PLAYER_USERNAME);
+        credentials_buffer.Put(handshakeSafeName, true);
 
         var l = credentials_buffer.Length;
 
@@ -99,12 +102,15 @@ public partial class Multiplayer {
                 }
             }
             if (check_name) {
-                if (userInfo.userName.Length <= 2) {
-                    deny_reason = ($"Name too short.");
+                // 支持 Unicode 昵称校验：含非 ASCII 字符允许 Length >= 1，纯 ASCII 仍要求 Length >= 3
+                string sanitizedUnicode = Multiplayer.SanitizeUnicodeTextInput(userInfo.userName);
+                if (userInfo.userName != sanitizedUnicode) {
+                    deny_reason = ($"Corrupt payload.");
                     return false;
                 }
-                if (userInfo.userName != Multiplayer.SanitizeTextInput(userInfo.userName)) {
-                    deny_reason = ($"Corrupt payload.");
+                int minLength = Multiplayer.ContainsNonAscii(userInfo.userName) ? 1 : 3;
+                if (userInfo.userName.Length < minLength) {
+                    deny_reason = ($"Name too short.");
                     return false;
                 }
             }

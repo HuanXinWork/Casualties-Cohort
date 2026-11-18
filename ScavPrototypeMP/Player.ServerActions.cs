@@ -14,6 +14,37 @@ namespace Together {
         static TMP_FontAsset s_retroGamingFontAsset = null;
 
         public void ApplyNameAndColor(string name, Color24 color) {
+            // 兼容 KSteam.OnLobbyCreated 传入 SteamId.ToString() 的历史调用：本地房主恢复为真实 Unicode 期望昵称，避免房主名退化为 17 位数字 ID
+            if (SteamId != 0 && string.Equals(name, SteamId.ToString(), StringComparison.Ordinal)) {
+                if (IsLocal && Net.IsServer) {
+                    string localDesired = Multiplayer.SanitizeUnicodeTextInput(Multiplayer.PLAYER_USERNAME);
+                    if (!string.IsNullOrEmpty(localDesired)) {
+                        name = localDesired;
+                    }
+                } else if (!nameIsCustom && KSteam.Loaded) {
+                    string persona = Multiplayer.SanitizeUnicodeTextInput(KSteam.GetSteamUsername(SteamId));
+                    if (!string.IsNullOrEmpty(persona)) {
+                        name = persona;
+                    }
+                }
+            }
+
+            // 先为 Retro GamingPix 挂载系统动态 Unicode 回退字体表，使后续 ReplaceMissingCharacters(HasCharacter(..., true)) 原生识别中文/俄文/日韩文而不替换为 '?'
+            {
+                if (s_retroGamingFontAsset == null) {
+                    IEnumerable<TMP_FontAsset> ggggfd = GameObject.FindObjectsOfType<TextMeshProUGUI>(true).Select(x => x.font);
+                    s_retroGamingFontAsset = ggggfd.FirstOrDefault(x => x != null && x.name == "Retro GamingPix");
+                    if (s_retroGamingFontAsset == null) {
+                        s_retroGamingFontAsset = Resources.FindObjectsOfTypeAll<TMP_FontAsset>()
+                            .FirstOrDefault(x => x != null && x.name == "Retro GamingPix");
+                    }
+                }
+                if (s_retroGamingFontAsset != null) {
+                    UnicodeFontFallback.EnsureInstalled(s_retroGamingFontAsset);
+                    name = FontUtils.ReplaceMissingCharacters(s_retroGamingFontAsset, name);
+                }
+            }
+
             if (BasePlayer != null) {
                 if (Net.IsServer) {
                     BasePlayer.playerName.Value = name;
@@ -23,17 +54,6 @@ namespace Together {
 
             // the synced name is the one that player connected with. do not replace it with this machine's friend cache.
             nameIsCustom = true;
-
-            // check for weird characters
-            {
-                if (s_retroGamingFontAsset == null) {
-                    IEnumerable<TMP_FontAsset> ggggfd = GameObject.FindObjectsOfType<TextMeshProUGUI>().Select(x => x.font);
-                    s_retroGamingFontAsset = ggggfd.FirstOrDefault(x => x != null && x.name == "Retro GamingPix");
-                }
-                if (s_retroGamingFontAsset != null) {
-                    name = FontUtils.ReplaceMissingCharacters(s_retroGamingFontAsset, name);
-                }
-            }
 
             playerName = name;
             playerColor = color;

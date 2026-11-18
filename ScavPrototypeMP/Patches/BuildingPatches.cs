@@ -1,9 +1,11 @@
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
+using LiteNetLib.Utils;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Unity.VisualScripting;
 using UnityEngine;
@@ -307,17 +309,155 @@ internal static class BatteryRechargerSync {
 
 
 
-// patch the sound
-[HarmonyPatch(typeof(CaveTickSpawner), nameof(CaveTickSpawner.OnTriggerEnter2D))]
-static class CaveTickSpawner_SoundPatch {
-    static void Prefix(CaveTickSpawner __instance, Collider2D other, ref bool __state) {
-        __state = __instance.started;
+/// <summary>
+/// 洞穴蜱虫巢（<see cref="CaveTickSpawner"/>）联机权威触发与静态巢穴销毁同步补丁（对应 Issue #6）：
+/// <para>
+/// 1. 客户端拦截本地 <see cref="CaveTickSpawner.OnTriggerEnter2D"/>，杜绝客机本地生成 16 只未注册假蜱虫或单方面销毁巢穴。
+/// 2. 服务端使用 <see cref="ConditionalWeakTable{TKey,TValue}"/> 按实例独立节流（0.25s，避免多巢穴共享全局计时器互相饿死），
+///    在模拟区块内主动扫描存活玩家/角色距离并权威触发刷怪，同时通过既有 <see cref="NetmsgId.CLIENT_Krokosha_CaveTicks_Tracker_deny"/>
+///    移除全客机静态巢穴并广播 3D 音效（零新增包 ID，100% 兼容原版 v5.5.3.0 线协议）。
+/// 3. 若房主自身物理碰撞触发原版 <c>OnTriggerEnter2D</c>，同样在 Postfix 统一广播 3D 音效与 <c>deny</c> 消息，并即时移除服务端
+///    <see cref="TrackerStaticCaveTicks"/> 以防 10s 延迟销毁窗口内响应客机查询而误重发巢穴。
+/// </para>
+/// </summary>
+[HarmonyPatch(typeof(CaveTickSpawner))]
+static class CaveTickSpawner_MultiplayerPatch {
+    private const float ServerScanIntervalSeconds = 0.25f;
+    private const float DefaultTriggerRadius = 2.5f;
+
+    private sealed class SpawnerRuntimeState {
+        public float NextScanTime;
+        public float CachedRadius = -1f;
+        public Vector2 CachedOffset;
+        public bool DenyBroadcasted;
     }
-    static void Postfix(CaveTickSpawner __instance, Collider2D other, ref bool __state) {
-        if (__instance.started && !__state) {
-            Sound_Play_MultiplayerPatch.force = true;
-            Sound.Play("caveticks", __instance.transform.position, twoDimensional: false, pitchShift: false, null, 0.7f);
+
+    private static readonly ConditionalWeakTable<CaveTickSpawner, SpawnerRuntimeState> States = new ConditionalWeakTable<CaveTickSpawner, SpawnerRuntimeState>();
+
+    private static SpawnerRuntimeState GetState(CaveTickSpawner spawner) {
+        return States.GetOrCreateValue(spawner);
+    }
+
+    private static float GetTriggerRadiusAndCenter(CaveTickSpawner spawner, SpawnerRuntimeState state, out Vector2 center) {
+        Transform t = spawner.transform;
+        Vector2 basePos = t.position;
+        if (state.CachedRadius < 0f) {
+            if (spawner.TryGetComponent(out CircleCollider2D circle) && circle.radius > 0.01f) {
+                Vector3 lossy = t.lossyScale;
+                float scale = Mathf.Max(Mathf.Abs(lossy.x), Mathf.Abs(lossy.y));
+                state.CachedRadius = circle.radius * (scale > 0.0001f ? scale : 1f);
+                state.CachedOffset = new Vector2(circle.offset.x * lossy.x, circle.offset.y * lossy.y);
+            } else {
+                state.CachedRadius = DefaultTriggerRadius;
+                state.CachedOffset = Vector2.zero;
+            }
         }
+        center = basePos + state.CachedOffset;
+        return state.CachedRadius;
+    }
+
+    private static void BroadcastDenyOnce(CaveTickSpawner spawner, SpawnerRuntimeState state) {
+        if (state.DenyBroadcasted || !Net.IsRunning || !Net.IsServer || spawner == null) {
+            return;
+        }
+        state.DenyBroadcasted = true;
+
+        if (spawner.TryGetComponent(out TrackerStaticCaveTicks tracker) && tracker != null) {
+            UnityEngine.Object.Destroy(tracker);
+        }
+
+        if (ServerMain.AllClientIdsExceptHost.Count > 0) {
+            NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_Krokosha_CaveTicks_Tracker_deny);
+            writer.Put((Vector2)spawner.transform.position);
+            Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
+        }
+    }
+
+    private static void NotifyServerTriggered(CaveTickSpawner spawner, SpawnerRuntimeState state) {
+        Sound_Play_MultiplayerPatch.force = true;
+        Sound.Play("caveticks", spawner.transform.position, twoDimensional: false, pitchShift: false, null, 0.7f);
+        BroadcastDenyOnce(spawner, state);
+    }
+
+    [HarmonyPatch(nameof(CaveTickSpawner.OnTriggerEnter2D))]
+    [HarmonyPrefix]
+    static bool OnTriggerEnter2D_Prefix(CaveTickSpawner __instance, ref bool __state) {
+        if (!Net.IsRunning) {
+            __state = __instance != null && __instance.started;
+            return true;
+        }
+        if (Net.IsClient) {
+            __state = false;
+            return false;
+        }
+        __state = __instance != null && __instance.started;
+        return true;
+    }
+
+    [HarmonyPatch(nameof(CaveTickSpawner.OnTriggerEnter2D))]
+    [HarmonyPostfix]
+    static void OnTriggerEnter2D_Postfix(CaveTickSpawner __instance, ref bool __state) {
+        if (!Net.IsRunning || !Net.IsServer || __instance == null) {
+            return;
+        }
+        if (__instance.started && !__state) {
+            NotifyServerTriggered(__instance, GetState(__instance));
+        }
+    }
+
+    [HarmonyPatch(nameof(CaveTickSpawner.Update))]
+    [HarmonyPostfix]
+    static void Update_Postfix(CaveTickSpawner __instance) {
+        if (!Net.IsRunning || !Net.IsServer || __instance == null) {
+            return;
+        }
+        if (WorldGeneration.world == null || !WorldGeneration.world.worldExists) {
+            return;
+        }
+
+        SpawnerRuntimeState state = GetState(__instance);
+        if (__instance.started) {
+            if (!state.DenyBroadcasted) {
+                BroadcastDenyOnce(__instance, state);
+            }
+            return;
+        }
+
+        float now = Time.unscaledTime;
+        if (now < state.NextScanTime) {
+            return;
+        }
+        state.NextScanTime = now + ServerScanIntervalSeconds;
+
+        Vector2 spawnerPos = __instance.transform.position;
+        if (!SharedMain.PositionIsInSimulatedChunk(spawnerPos)) {
+            return;
+        }
+
+        float radius = GetTriggerRadiusAndCenter(__instance, state, out Vector2 center);
+        float radiusSqr = radius * radius;
+
+        bool triggered = false;
+        for (int i = 0; i < NetBody.all_instances.Count; i++) {
+            NetBody nb = NetBody.all_instances[i];
+            if (nb == null || nb.body == null || !nb.body.alive) {
+                continue;
+            }
+            if ((nb.pos - center).sqrMagnitude <= radiusSqr) {
+                triggered = true;
+                break;
+            }
+        }
+
+        if (!triggered) {
+            return;
+        }
+
+        __instance.started = true;
+        __instance.StartCoroutine(__instance.SpawnSpiders());
+        __instance.GetComponent<ParticleSystem>()?.Stop(false, ParticleSystemStopBehavior.StopEmitting);
+        UnityEngine.Object.Destroy(__instance.gameObject, 10f);
+        NotifyServerTriggered(__instance, state);
     }
 }
 

@@ -193,7 +193,8 @@ namespace Together {
         }
 
         private void LateUpdate() {
-            UIMainMenu.USERINPUT_NAME = Multiplayer.SanitizeTextInput(UIMainMenu.USERINPUT_NAME);
+            // 使用 Unicode 清洗替代纯 ASCII 正则，避免每帧将玩家输入或 Steam 读取的中文/俄文昵称清空
+            UIMainMenu.USERINPUT_NAME = Multiplayer.SanitizeUnicodeTextInput(UIMainMenu.USERINPUT_NAME);
 
             if (_reset_gui_textures_next_frame) {
                 _reset_gui_textures_next_frame = false;

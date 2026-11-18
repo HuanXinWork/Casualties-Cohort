@@ -192,6 +192,9 @@ public partial class ClientMain : MonoBehaviour {
 
         var locplr = ScavPlayer.LocalPlayer;
         if (Net.IsConnected && locplr != null) {
+            if (Net.IsClient) {
+                UnicodeFontFallback.Client_TrySendUnicodeNameIfNeeded();
+            }
             double raw_sync_delta = Time.realtimeSinceStartupAsDouble - _last_sync_time;
             if (raw_sync_delta < 0) {
                 _last_sync_time = 0;

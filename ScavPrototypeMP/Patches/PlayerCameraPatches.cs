@@ -134,6 +134,24 @@ static class GlobalDark_Update_DontEatClicks {
     }
 }
 
+/// <summary>
+/// 修复联机下本地角色死亡或观战时全局 UI Tooltip 永久消失缺陷（对应上游 PR #56）：
+/// 原版 <see cref="GlobalDark.forceDisable"/> 在 <c>!PlayerCamera.main.body.alive</c> 时强制返回 <c>true</c>，
+/// 导致玩家阵亡观战期间无法查看存活队友 Moodles、悬停躯体信息及设置面板提示，且 <c>PlayerCamera.main.body</c> 为空时会抛异常。
+/// 单机模式返回 <c>true</c> 100% 保持原版死亡隐藏行为；联机模式仅在小游戏激活或过场演出期间禁用 Tooltip。
+/// </summary>
+[HarmonyPatch(typeof(GlobalDark), nameof(GlobalDark.forceDisable), MethodType.Getter)]
+internal static class GlobalDark_get_forceDisable_MultiplayerPatch {
+    private static bool Prefix(ref bool __result) {
+        if (!Net.IsRunning) {
+            return true;
+        }
+        __result = (MinigameBase.main != null && MinigameBase.main.currentMinigame != null)
+            || (WorldGeneration.world != null && WorldGeneration.world.cutsceneActive);
+        return false;
+    }
+}
+
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.LateUpdate))]
 public static class PlayerCamera_LateUpdate_TraderHold {
     private static void Postfix(PlayerCamera __instance) {

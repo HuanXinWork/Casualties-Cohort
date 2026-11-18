@@ -209,8 +209,11 @@ public static class Body_HandlePeriodicChecks_MultiplayerPatch {
         }
 
         if (Util.IsBodyLocal(__instance)) {
+            // 对齐原版 Body.HandlePeriodicChecks 外层 WorldGeneration.GetRunSettingBool("braindamagefx") 门控（Issue #29），
+            // 防止关闭脑损伤视觉特效（脑叶切除开关）的局内仍强制触发本地相机脑损闪屏。
             if (__instance.consciousness > 20f
                 && UnityEngine.Random.value > __instance.brainHealth * 0.01f
+                && WorldGeneration.GetRunSettingBool("braindamagefx")
                 && !PlayerCamera.main.lastStandPanel.activeSelf
                 && !UIInGame.SpectatorModeActive) {
                 PlayerCamera.main.ForceFlashBrain();

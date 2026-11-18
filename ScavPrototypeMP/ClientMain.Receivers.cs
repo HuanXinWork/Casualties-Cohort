@@ -312,6 +312,10 @@ public partial class ClientMain {
     [ClientReceiver((byte)NetmsgId.ServerInfoUpdate, false)]
     static void ClientReceiver__ServerInfoUpdate(knetid _, LiteNetLib.Utils.NetDataReader reader) {
         Net.CurrentServerInfo.Deserialize(reader);
+        // 服务端在 ScavPlayer.Start 登记客户端映射后立即下发 ServerInfoUpdate，此时上报 Unicode 真实昵称可确保服务端已就绪接收
+        if (Net.IsRunning && Net.IsClient) {
+            UnicodeFontFallback.Client_TrySendUnicodeNameIfNeeded();
+        }
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_PlayerBarkRelay)]
