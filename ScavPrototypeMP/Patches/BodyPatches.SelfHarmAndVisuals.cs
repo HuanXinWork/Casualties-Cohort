@@ -308,6 +308,9 @@ static class FacialExpression_Update_MultiplayerPatch {
     }
 
     static bool Prefix(FacialExpression __instance) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         Body body = __instance.body;
         FacialExpressionPause data = __instance.GetOrAddComponent<FacialExpressionPause>();
         data.originalEyeList ??= __instance.eyeList;

@@ -446,8 +446,9 @@ public partial class NetBody : MonoBehaviour {
         }
 #endif
 
-        // 躯体首次初始化就绪：通知外部模组（如 SkinSync）挂载贴图与渲染钩子
-        if (body != null) {
+        // 躯体首次初始化就绪：仅在已绑定有效 syncBody 且尚未通知时触发唯一一次，避免 netId=0 早产通知或与重建入口重复连发
+        if (Net.IsRunning && body != null && syncBody != null && !_notifiedBodyReady) {
+            _notifiedBodyReady = true;
             TogetherPanelApi.NotifyBodyReadyOrRebuilt(this, body.charType, isRebuild: false);
         }
     }

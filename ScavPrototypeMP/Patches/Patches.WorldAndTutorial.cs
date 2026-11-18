@@ -148,6 +148,9 @@ public static class Body_Start_MultiplayerPatch {
     }
 
     static void Postfix(Body __instance) {
+        if (!Net.IsRunning) {
+            return;
+        }
         var pb = __instance.GetComponent<NetBody>();
         string pid = "NULL";
 
@@ -236,6 +239,10 @@ static class ShuttleStartOpen_Update_MultiplayerPatch {
     static float timer = 0f;
 
     static void Postfix(ShuttleStartOpen __instance) {
+        if (!Net.IsRunning) {
+            timer = 0f;
+            return;
+        }
         if (Util.IsWorldGenerated() && Util.TryGetLocalBody(out var b)) {
             if (!KM.DistanceCheck(__instance.transform.position, b.transform.position, GameplayRanges.ObjectNearbyRadius)) {
                 timer += Time.unscaledDeltaTime;

@@ -14,7 +14,7 @@ internal static class FixHostPickup
 	// after PickUpItem, if the body is actually holding it, register the SyncInfo now.
 	static void Postfix(Body __instance, Item item)
 	{
-		if (!Net.IsServer || item == null || __instance == null)
+		if (!Net.IsRunning || !Net.IsServer || item == null || __instance == null)
 			return;
 		if (!__instance.HoldingItem(item))
 			return;

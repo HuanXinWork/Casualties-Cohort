@@ -435,7 +435,7 @@ internal partial class ItemSync : CasualtiesTogetherSingleton {
     [HarmonyPatch(typeof(Item), nameof(Item.DrawBlood))]
     static class Item_DrawBlood_MultiplayerPatch {
         static void Postfix(WaterContainerItem wat, Limb limb) {
-            if (!Net.IsServer || wat == null)
+            if (!Net.IsRunning || !Net.IsServer || wat == null)
                 return;
             Item item = wat.GetComponent<Item>();
             if (item != null && NetObjectRegistry.TryGetSyncInfo(item.gameObject, out SyncInfo si) && si != null && !si.IsDestroyed) {

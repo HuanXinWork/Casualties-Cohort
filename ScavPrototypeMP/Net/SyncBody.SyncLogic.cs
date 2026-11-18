@@ -199,6 +199,7 @@ namespace Together {
             body.targetLookPos = _targetLookPos.InterpolatedValue;
             body.moveDir = (Vector2)_moveDir.Value;
             body.crouching = _crouching.Value;
+            body.handSlot = _offHand.Value ? 1 : 0;
 
             if (_isPiggyback.Value) {
                 if (NetBody.TryGetNetBodyFromId(_piggyback.Value, out NetBody target_nb)) {

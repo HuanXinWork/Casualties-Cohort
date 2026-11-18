@@ -112,6 +112,7 @@ public partial struct MultiplayerGameRules : INetSerializeByMemcpy {
     public bool Permadeath = false;
     public bool ReviveOnNextLevel = false;
     public bool ReviveFromTrader = true;
+    public bool TraderReviveAsSpecies = false;
 
     public bool RespawnKeepInventory = false;
     public bool RespawnKeepSkills = false;

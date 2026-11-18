@@ -115,7 +115,29 @@ static class CeilingTurret_OnWillRenderObject_HostSim_MultiplayerPatch {
     static bool Prefix() => !Net.IsRunning;
 }
 
+internal sealed class CeilingTurretClient : MonoBehaviour {
+    public bool Seeing;
+    public float TimeSaw;
+}
+
 internal static class CeilingTurretHostSim {
+    private struct SentAim {
+        public float Angle;
+        public float Next;
+        public bool Seeing;
+    }
+
+    private struct MoveSample {
+        public Vector2 Pos;
+        public float Time;
+        public bool Fast;
+    }
+
+    static readonly Dictionary<int, SentAim> Sent = new Dictionary<int, SentAim>();
+    static CeilingTurret[] _cached;
+    static int _cachedFrame = -1;
+    static readonly Dictionary<int, MoveSample> _moveSample = new Dictionary<int, MoveSample>();
+
     internal static void Tick(CeilingTurret ct) {
         if (ct == null) {
             return;
@@ -151,6 +173,9 @@ internal static class CeilingTurretHostSim {
                 source.volume = Mathf.MoveTowards(source.volume, 1f, Time.deltaTime * 3f);
             }
         } else {
+            if (!ct.alwaysSee) {
+                timeSaw = 0f;
+            }
             if (ct.lights != null) {
                 ct.lights.enabled = Mathf.PingPong(Time.time, 0.2f) > 0.1f;
             }
@@ -195,58 +220,79 @@ internal static class CeilingTurretHostSim {
             }
         }
         tr.Field("timeSawMovement").SetValue(timeSaw);
-        Publish(ct, gunAngle, fired, seeing);
+        Vector2 shotPos = lowerGun != null ? (Vector2)lowerGun.position : (Vector2)ct.transform.position;
+        Vector2 shotDir = lowerGun != null ? (Vector2)(-lowerGun.up) : Vector2.down;
+        Publish(ct, gunAngle, fired, seeing, timeSaw, shotPos, shotDir);
     }
 
-    struct SentAim {
-        public float Angle;
-        public float Next;
-    }
-
-    static readonly Dictionary<int, SentAim> Sent = new Dictionary<int, SentAim>();
-
-    static void Publish(CeilingTurret ct, float angle, bool fired, bool seeing) {
+    static void Publish(CeilingTurret ct, float angle, bool fired, bool seeing, float timeSaw, Vector2 shotPos, Vector2 shotDir) {
         if (ct == null || ServerMain.AllClientIdsExceptHost == null || ServerMain.AllClientIdsExceptHost.Count == 0) {
             return;
         }
         int id = ct.GetInstanceID();
         bool known = Sent.TryGetValue(id, out SentAim prev);
-        bool aimDue = fired || (seeing && (!known || Mathf.Abs(Mathf.DeltaAngle(prev.Angle, angle)) > 3f || Time.time >= prev.Next));
+        bool lostSight = known && prev.Seeing && !seeing;
+        bool aimDue = fired || lostSight || (seeing && (!known || Mathf.Abs(Mathf.DeltaAngle(prev.Angle, angle)) > 3f || Time.time >= prev.Next));
         if (!aimDue) {
             return;
         }
-        Sent[id] = new SentAim { Angle = angle, Next = Time.time + (fired ? 0.05f : 0.2f) };
+        Sent[id] = new SentAim {
+            Angle = angle,
+            Next = Time.time + (fired ? 0.05f : 0.2f),
+            Seeing = seeing,
+        };
+        ushort syncId = 0;
+        if (NetObjectRegistry.TryGetSyncInfo(ct.gameObject, out SyncInfo si) && si != null) {
+            syncId = si.syncId;
+        }
         NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
         writer.Put(CustomWireCommands.CeilingGun);
+        writer.Put(syncId);
         writer.Put((Vector2)ct.transform.position);
         writer.Put(angle);
+        writer.Put(seeing);
+        writer.Put(timeSaw);
         writer.Put(fired);
+        if (fired) {
+            writer.Put(shotPos);
+            writer.Put(shotDir);
+        }
         Net.Server_SendToClients(fired ? DeliveryMethod.ReliableUnordered : DeliveryMethod.Unreliable, writer, ServerMain.AllClientIdsExceptHost);
     }
 
-    public static void ApplyRemote(Vector2 pos, float angle, bool fired) {
-        CeilingTurret ct = FindNear(pos);
-        if (ct == null) {
+    public static void ApplyRemote(ushort syncId, Vector2 pos, float angle, bool seeing, float timeSaw, bool fired, Vector2 shotPos, Vector2 shotDir) {
+        CeilingTurret ct = FindById(syncId) ?? FindNear(pos);
+        if (ct != null) {
+            Pose(ct, angle);
+            CeilingTurretClient clientState = ct.GetComponent<CeilingTurretClient>();
+            if (clientState == null) {
+                clientState = ct.gameObject.AddComponent<CeilingTurretClient>();
+            }
+            clientState.Seeing = seeing;
+            clientState.TimeSaw = timeSaw;
+            if (fired) {
+                Traverse.Create(ct).Field("timeSinceShot").SetValue(0f);
+                if (ct.lowerGun != null && ct.barrelAnimCurve != null) {
+                    ct.lowerGun.localPosition = new Vector2(0f, ct.barrelAnimCurve.Evaluate(0f));
+                }
+            }
+        }
+        if (!fired) {
             return;
         }
-        Pose(ct, angle);
-        if (!fired || ct.lowerGun == null) {
-            return;
+        if (shotDir.sqrMagnitude < 0.01f) {
+            shotDir = Vector2.down;
         }
-        Traverse.Create(ct).Field("timeSinceShot").SetValue(0f);
-        if (ct.barrelAnimCurve != null) {
-            ct.lowerGun.localPosition = new Vector2(0f, ct.barrelAnimCurve.Evaluate(0f));
-        }
-        Sound.Play("rifleshot", ct.lowerGun.position, true, false, null, 1f, 1f, false, false);
+        Sound.Play("rifleshot", shotPos, true, false, null, 1f, 1f, false, false);
         if (WorldGeneration.world != null && WorldGeneration.world.biomeDepth == 11 && PlayerCamera.main != null) {
             PlayerCamera.main.threatMusicTime = 2f;
         }
         TurretScript_Shoot_MultiplayerPatch.SuppressBodyDamage = true;
         try {
             TurretScript.Shoot(new FireInfo {
-                pos = ct.lowerGun.position,
-                dir = -ct.lowerGun.up,
-                ignoreTrans = ct.transform,
+                pos = shotPos,
+                dir = shotDir,
+                ignoreTrans = ct != null ? ct.transform : null,
                 playerDamageMultiplier = 1f,
             });
         } finally {
@@ -264,17 +310,41 @@ internal static class CeilingTurretHostSim {
     }
 
     internal static void ClientBarrel(CeilingTurret ct) {
-        if (ct == null || ct.lowerGun == null || ct.barrelAnimCurve == null) {
+        if (ct == null) {
             return;
         }
-        Traverse tr = Traverse.Create(ct);
-        float t = tr.Field("timeSinceShot").GetValue<float>() + Time.deltaTime;
-        tr.Field("timeSinceShot").SetValue(t);
-        ct.lowerGun.localPosition = new Vector2(0f, ct.barrelAnimCurve.Evaluate(t));
+        CeilingTurretClient clientState = ct.GetComponent<CeilingTurretClient>();
+        float timeSaw = clientState != null ? clientState.TimeSaw : 0f;
+        bool seeing = clientState != null && clientState.Seeing;
+        if (ct.upperGun != null) {
+            float angle = Traverse.Create(ct).Field("gunAngle").GetValue<float>();
+            ct.upperGun.eulerAngles = new Vector3(0f, 0f, angle);
+            ct.upperGun.localPosition = ct.upperGun.up * -0.75f;
+        }
+        if (ct.lowerGun != null && ct.barrelAnimCurve != null) {
+            Traverse tr = Traverse.Create(ct);
+            float t = tr.Field("timeSinceShot").GetValue<float>() + Time.deltaTime;
+            tr.Field("timeSinceShot").SetValue(t);
+            ct.lowerGun.localPosition = new Vector2(0f, ct.barrelAnimCurve.Evaluate(t));
+        }
+        if (ct.alwaysSee && ct.openLight != null) {
+            ct.openLight.intensity = Mathf.PingPong(Time.time * 10f, 1f) * timeSaw * 5f;
+        }
+        if (ct.lights != null) {
+            ct.lights.enabled = seeing || Mathf.PingPong(Time.time, 0.2f) > 0.1f;
+        }
+        AudioSource source = Traverse.Create(ct).Field("source").GetValue<AudioSource>();
+        if (source != null) {
+            source.volume = Mathf.MoveTowards(source.volume, seeing ? 1f : 0f, Time.deltaTime * 3f);
+            if (source.volume > 0f && !source.isPlaying) {
+                source.Play();
+            }
+            if (source.volume <= 0f && source.isPlaying) {
+                source.Stop();
+            }
+            source.pitch = 0.5f + timeSaw * 1.5f;
+        }
     }
-
-    static CeilingTurret[] _cached;
-    static int _cachedFrame = -1;
 
     static CeilingTurret FindNear(Vector2 pos) {
         if (_cached == null || Time.frameCount - _cachedFrame > 45) {
@@ -282,7 +352,7 @@ internal static class CeilingTurretHostSim {
             _cachedFrame = Time.frameCount;
         }
         CeilingTurret best = null;
-        float bestSqr = 4f;
+        float bestSqr = 64f;
         for (int i = 0; i < _cached.Length; i++) {
             CeilingTurret ct = _cached[i];
             if (ct == null) {
@@ -297,13 +367,33 @@ internal static class CeilingTurretHostSim {
         return best;
     }
 
+    static CeilingTurret FindById(ushort syncId) {
+        if (syncId == 0 || !NetObjectRegistry.TryGetSyncInfo(syncId, out SyncInfo si) || si == null || si.go == null) {
+            return null;
+        }
+        CeilingTurret ct = si.go.GetComponent<CeilingTurret>();
+        if (ct == null) {
+            ct = si.go.GetComponentInChildren<CeilingTurret>(includeInactive: true);
+        }
+        return ct;
+    }
+
     [CTPostInit]
     static void InitGuns() {
         ClientMain.ClientCustomCommandsDict[CustomWireCommands.CeilingGun] = (cmd, reader) => {
+            reader.Get(out ushort syncId);
             reader.Get(out Vector2 pos);
             reader.Get(out float angle);
+            reader.Get(out bool seeing);
+            reader.Get(out float timeSaw);
             reader.Get(out bool fired);
-            ApplyRemote(pos, angle, fired);
+            Vector2 shotPos = pos;
+            Vector2 shotDir = Vector2.down;
+            if (fired) {
+                reader.Get(out shotPos);
+                reader.Get(out shotDir);
+            }
+            ApplyRemote(syncId, pos, angle, seeing, timeSaw, fired, shotPos, shotDir);
         };
     }
 
@@ -317,7 +407,7 @@ internal static class CeilingTurretHostSim {
                 continue;
             }
             Body body = plr.body;
-            if (body.transform.position.y >= ct.transform.position.y) {
+            if (body.transform.position.y >= ct.transform.position.y || (!ct.alwaysSee && !MovingFast(body))) {
                 continue;
             }
             bool clear = true;
@@ -340,6 +430,30 @@ internal static class CeilingTurretHostSim {
         }
         seeing = best != null;
         return best;
+    }
+
+    static bool MovingFast(Body body) {
+        if (body == null) {
+            return false;
+        }
+        int id = body.GetInstanceID();
+        Vector2 pos = body.transform.position;
+        float now = Time.time;
+        if (body.grounded && body.moveDir.sqrMagnitude < 0.04f) {
+            _moveSample[id] = new MoveSample { Pos = pos, Time = now, Fast = false };
+            return false;
+        }
+        if (!_moveSample.TryGetValue(id, out MoveSample prev)) {
+            _moveSample[id] = new MoveSample { Pos = pos, Time = now, Fast = false };
+            return false;
+        }
+        float dt = now - prev.Time;
+        if (dt < 0.25f) {
+            return prev.Fast;
+        }
+        bool fast = (pos - prev.Pos).magnitude > 15f * dt;
+        _moveSample[id] = new MoveSample { Pos = pos, Time = now, Fast = fast };
+        return fast;
     }
 }
 

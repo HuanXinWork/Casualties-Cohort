@@ -33,7 +33,7 @@ public static class FluidManager_FixedUpdate_MultiplayerPatch {
     private static int simIndex = 0;
 
     static bool Prefix() {
-        if (NetBody.all_instances.Count > 0 && Net.IsServer && WorldGeneration.world != null) {
+        if (Net.IsRunning && NetBody.all_instances.Count > 0 && Net.IsServer && WorldGeneration.world != null) {
             HashSet<Vector2UInt8> vecs = new();
 
             foreach (var body in NetBody.all_instances) {

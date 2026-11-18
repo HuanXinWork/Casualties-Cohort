@@ -1,5 +1,6 @@
 using LiteEntitySystem;
 using LiteEntitySystem.Extensions;
+using Together.Api;
 using UnityEngine;
 
 namespace Together {
@@ -21,6 +22,7 @@ namespace Together {
         private SyncVar<Vector2> _targetLookPos;
         private SyncVar<bool> _isRight;
         private SyncVar<bool> _crouching;
+        private SyncVar<bool> _offHand;
 
         internal SyncVar<bool> _standing;
         internal SyncVar<bool> _isPiggyback;
@@ -263,7 +265,7 @@ namespace Together {
                 nb = plr.netBody;
                 return;
             }
-            // 客户端检测到远端物种不一致时重建角色躯体
+            // 客户端检测到远端物种不一致时重建角色躯体，并以 isRebuild=true 触发唯一一次外部重涂钩子
             if (nb != null && nb.body != null && nb.body.charType != chr && !nb.IsBodyLocal()) {
                 Together.log.warn($"[CharSelect] client recreate body id={Id} was={nb.body.charType} now={chr}");
                 NetBody.DestroyNPC(nb);
@@ -275,6 +277,10 @@ namespace Together {
                 }
                 if (nb != null) {
                     nb.syncBody = this;
+                    nb._notifiedBodyReady = true;
+                    if (nb.body != null) {
+                        TogetherPanelApi.NotifyBodyReadyOrRebuilt(nb, chr, isRebuild: true);
+                    }
                 }
             } else if (nb == null) {
                 CreateCharacter();
@@ -325,6 +331,7 @@ namespace Together {
             _targetLookPos.Value = nb.body.targetLookPos;
             _isRight.Value = nb.body.isRight;
             _crouching.Value = nb.body.crouching;
+            _offHand.Value = nb.body.handSlot != 0;
             _standing.Value = nb.body.standing;
             // 仅在角色非站立（布娃娃倒地）且未被背负时写入 15 肢体 × 4 个 SyncGroup3 字段，省去站立态每 Tick 60 次跨层物理属性读取与标脏
             if (nb?.body != null && !nb.body.standing && !nb.IsPiggybacking()) {

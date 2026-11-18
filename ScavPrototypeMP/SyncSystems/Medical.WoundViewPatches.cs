@@ -18,6 +18,9 @@ namespace Together;
 [HarmonyPatch(typeof(WoundViewLimb), nameof(WoundViewLimb.OnPointerEnter))]
 public static class WoundViewLimb_OnPointerEnter_MultiplayerPatch {
     private static bool Prefix(WoundViewLimb __instance) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         if (__instance.woundview == null || __instance.woundview.body == null) {
             return false;
         }

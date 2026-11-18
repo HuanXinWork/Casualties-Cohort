@@ -359,7 +359,7 @@ public static class RegenerateWorldPatch {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.GenerateEntityAtPos))]
 public static class WorldGeneration_GenerateEntityAtPos_MultiplayerPatch {
     public static void Prefix(GameObject basObj) {
-        if (basObj == null) {
+        if (!Net.IsRunning || basObj == null) {
             return;
         }
         foreach (Transform ch in basObj.transform) {
@@ -408,7 +408,7 @@ static class WorldGeneration_Update_EarthquakeBlocksPatch {
     static readonly List<Vector2> quake_centers = new();
 
     static void Postfix(WorldGeneration __instance) {
-        if (!Net.IsServer || __instance == null || __instance.earthquakeIntensity <= 0f) {
+        if (!Net.IsRunning || !Net.IsServer || __instance == null || __instance.earthquakeIntensity <= 0f) {
             return;
         }
         float dt = Time.deltaTime;

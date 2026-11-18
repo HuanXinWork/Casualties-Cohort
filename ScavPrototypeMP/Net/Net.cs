@@ -305,6 +305,8 @@ namespace Together {
                 }
 
                 IsRunning = false;
+                ModHooks.LastAppliedCustomWorldSeed = 0;
+                ModHooks.PendingClientCustomWorldSeed = 0;
                 SERVER_MESSAGE_HANDLERS.Clear();
                 CLIENT_MESSAGE_HANDLERS.Clear();
 

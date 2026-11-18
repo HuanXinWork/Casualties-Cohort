@@ -257,6 +257,9 @@ public static class HandCrankMinigame_PhysicsUpdate_MultiplayerPatch {
 [HarmonyPatch(typeof(ManualDefibMinigame), nameof(ManualDefibMinigame.GetEstimationRange))]
 internal static class ManualDefibMinigame_GetEstimationRange_MultiplayerPatch {
     private static bool Prefix(ref float __result) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         Body localBody = Util.GetLocalBodyNullable();
         float range = localBody != null ? (70f - localBody.skills.INTFrom10 * 5f) : 70f;
         __result = Mathf.Max(5f, range);
@@ -265,12 +268,12 @@ internal static class ManualDefibMinigame_GetEstimationRange_MultiplayerPatch {
 }
 
 /// <summary>
-/// 联机下屏蔽密码锁彩蛋爆炸，避免未同步单边自爆摧毁地形。
+/// 联机下屏蔽密码锁彩蛋爆炸，避免未同步单边自爆摧毁地形；单机下保留原版彩蛋。
 /// </summary>
 [HarmonyPatch(typeof(KeypadMinigame), nameof(KeypadMinigame.CheckForMegalovania))]
 internal static class KeypadMinigame_CheckForMegalovania_MultiplayerPatch {
     private static bool Prefix() {
-        return false;
+        return !Net.IsRunning;
     }
 }
 

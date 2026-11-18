@@ -135,7 +135,7 @@ public static class CharacterSpawn {
         };
     }
 
-    public static void ServerForceSwapSpecies(ScavPlayer plr, int chr, bool wipeXp) {
+    public static void ServerForceSwapSpecies(ScavPlayer plr, int chr, bool wipeXp, bool dropInventory = true) {
         if (!Net.IsServer || plr == null) {
             return;
         }
@@ -166,14 +166,17 @@ public static class CharacterSpawn {
         }
 
         if (plr.body != null && plr.body.charType != chr) {
-            RebuildBodyMesh(plr, chr, dropInventory: true);
+            RebuildBodyMesh(plr, chr, dropInventory: dropInventory);
         } else if (plr.body != null) {
             plr.body.charType = chr;
             ItemSync.RefreshWearableSpeciesSprites(plr.body);
             if (plr.body.talker != null) {
                 TalkerSpeciesFont.Apply(plr.body.talker);
             }
-            TogetherPanelApi.NotifyBodyReadyOrRebuilt(plr.netBody, chr, isRebuild: true);
+            if (plr.netBody != null) {
+                plr.netBody._notifiedBodyReady = true;
+                TogetherPanelApi.NotifyBodyReadyOrRebuilt(plr.netBody, chr, isRebuild: true);
+            }
         } else {
             NetBody.CreateNewPlayerCharacter(plr, sb);
             if (plr.netBody != null) {
@@ -265,7 +268,8 @@ public static class CharacterSpawn {
                     TalkerSpeciesFont.Apply(plr.body.talker);
                 }
             }
-            // 同 netId 物种网格重建完毕：通知外部模组（如 SkinSync）立即重涂新物种躯体贴图
+            // 同 netId 物种网格重建完毕：标记已通知并发出唯一一次 isRebuild=true，防止下一帧 NetBody.Start 重复触发
+            plr.netBody._notifiedBodyReady = true;
             TogetherPanelApi.NotifyBodyReadyOrRebuilt(plr.netBody, want, isRebuild: true);
         }
     }
@@ -301,6 +305,8 @@ public static class CharacterSpawn {
         if (plr.netBody != null) {
             plr.netBody.SetBodyPosition(pos);
             ApplySelectedToSyncBody(plr.netBody.syncBody ?? sb, plr);
+            // 先修正物种贴图与技能（此时临时置位以抑制 EnsureBodySpecies 抢发），最后统一发送唯一一次 isRebuild=true 通知
+            plr.netBody._notifiedBodyReady = true;
             EnsureBodySpecies(plr.body);
             TogetherPanelApi.NotifyBodyReadyOrRebuilt(plr.netBody, want, isRebuild: true);
         }
@@ -340,6 +346,7 @@ public static class CharacterSpawn {
             ServerRebuildBodyIfSpeciesMismatch(nb.plr);
             return;
         }
+        bool alreadyNotified = nb._notifiedBodyReady;
         body.charType = want;
         ItemSync.RefreshWearableSpeciesSprites(body);
         if (body.skills != null) {
@@ -352,7 +359,10 @@ public static class CharacterSpawn {
         if (body.talker != null) {
             TalkerSpeciesFont.Apply(body.talker);
         }
-        TogetherPanelApi.NotifyBodyReadyOrRebuilt(nb, want, isRebuild: true);
+        if (nb.syncBody != null && !alreadyNotified) {
+            nb._notifiedBodyReady = true;
+            TogetherPanelApi.NotifyBodyReadyOrRebuilt(nb, want, isRebuild: true);
+        }
     }
 
     public static TMP_FontAsset GetNoteFont(int chr) {

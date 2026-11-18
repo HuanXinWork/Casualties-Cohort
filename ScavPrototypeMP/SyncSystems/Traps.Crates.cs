@@ -198,6 +198,9 @@ public class ScavTraps : CasualtiesTogetherSingleton {
     }
 
     public static bool DamagingCrate_OnCollisionEnter2D_StolenWithFirstCheck(object rawCrate, Limb limb, Vector2 prevFrameSpeed) {
+        if (!Net.IsRunning) {
+            return false;
+        }
         var dmgcrate = rawCrate as DamagingCrate;
         if (dmgcrate == null || limb == null) {
             return true;

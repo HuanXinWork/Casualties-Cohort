@@ -281,8 +281,19 @@ internal partial class ItemSync {
         FavPendingMap.Remove(id);
     }
 
+    internal static bool LocalCustomizing(Item item) {
+#if FULLGAME
+        if (item == null || !Net.IsClient)
+            return false;
+        PlayerCamera cam = PlayerCamera.main;
+        return cam != null && cam.customizedItem == item;
+#else
+        return false;
+#endif
+    }
+
     internal static void ApplyFavourite(Item item, knetid id, bool value) {
-        if (item == null)
+        if (item == null || LocalCustomizing(item))
             return;
         if (FavPendingMap.TryGetValue(id, out FavPending pending)) {
             if (pending.want == value || Time.realtimeSinceStartupAsDouble >= pending.until)
@@ -300,6 +311,22 @@ internal partial class ItemSync {
         writer.Put(si.syncId);
         writer.Put(si.item.favourited);
         Net.Server_SendTo(DeliveryMethod.ReliableOrdered, writer, plr.playerId);
+    }
+
+    internal static void PushFavourite(Item item) {
+        if (!Net.IsRunning || item == null)
+            return;
+        if (!TryGetSyncInfo(item, out SyncInfo si) || si == null)
+            return;
+        if (Net.IsServer) {
+            si.favourited.Value = item.favourited;
+            return;
+        }
+        NetDataWriter writer = Net.CreateWriter(NetmsgId.SERVER_ItemFavourited);
+        writer.Put(si.syncId);
+        writer.Put(item.favourited);
+        Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
+        PredictFavourite(si.syncId, item.favourited);
     }
 
 #if FULLGAME
@@ -324,7 +351,7 @@ internal partial class ItemSync {
     }
 
     internal static void ApplyCosmetics(Item item, knetid id, string label, byte swatch) {
-        if (item == null)
+        if (item == null || LocalCustomizing(item))
             return;
         if (CosmeticsPendingMap.TryGetValue(id, out CosmeticsPending pending)) {
             bool match = pending.swatch == swatch && (pending.label ?? "") == (label ?? "");

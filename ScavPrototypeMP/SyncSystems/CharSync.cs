@@ -14,9 +14,8 @@ namespace Together;
 public partial struct ClientToServer_NetBodySyncPacket : INetSerializeByMemcpy {
     public ushort Tick;
 
-
     public bool crouching;
-
+    public bool offHand;
     public bool standing;
     public bool is_piggyback;
     public knetid piggyback;
@@ -56,6 +55,7 @@ public partial struct ClientToServer_NetBodySyncPacket : INetSerializeByMemcpy {
             moveDir = Vector2.zero;
         }
         crouching = body.crouching;
+        offHand = body.handSlot != 0;
 
         velocity = body.GetVelocity();
 
@@ -134,6 +134,10 @@ public partial struct ClientToServer_NetBodySyncPacket : INetSerializeByMemcpy {
 
         body.targetLookPos = this.targetLookPos;
         body.crouching = this.crouching;
+        // 服务端若刚收到可靠的 SwitchHands RPC，忽略早于该切换 Tick 的旧常规移动快照，避免主副手短暂回弹
+        if (!nb.handSwitched || LiteEntitySystem.Utils.SequenceDiff(Tick, nb.handSwitchTick) > 0) {
+            body.handSlot = offHand ? 1 : 0;
+        }
 
         nb.moveDir = compressedmoveDir;
         if (body.conscious) {

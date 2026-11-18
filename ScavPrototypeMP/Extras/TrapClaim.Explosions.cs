@@ -517,10 +517,19 @@ internal static partial class TrapClaim {
 #endif
 
     static readonly Dictionary<int, float> manifestClaimed = new();
+    static ushort manifestVictim;
+    static float manifestUntil;
 
-    internal static void HostManifestLunged(CrystalEnemy enemy) {
+    internal static void HostManifestLunged(CrystalEnemy enemy, knetid victim = default) {
         if (Net.IsServer && enemy != null && NetObjectRegistry.TryGetSyncInfo(enemy, out var si)) {
-            Relay(KindManifest, si.syncId, 0f);
+            manifestVictim = victim.id;
+            manifestUntil = Time.unscaledTime + 2f;
+            var writer = Net.CreateWriter(NetmsgId.CLIENT_TrapState);
+            writer.Put(KindManifest);
+            writer.Put(si.syncId);
+            writer.Put(0f);
+            writer.Put(victim);
+            Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
         }
     }
 
@@ -594,7 +603,11 @@ internal static partial class TrapClaim {
         if (!NetObjectRegistry.TryGetSyncInfo(id, out var si) || si.go == null || !si.go.TryGetComponent(out CrystalEnemy enemy)) {
             return false;
         }
-        if (!Near(enemy, nb.body) || !TakeWindow(KindManifest, id, nb.netId, false, ManifestWindow)) {
+        bool authorizedByLunge = manifestVictim != 0 && nb.netId.id == manifestVictim && Time.unscaledTime <= manifestUntil;
+        if (!authorizedByLunge && !Near(enemy, nb.body)) {
+            return false;
+        }
+        if (!TakeWindow(KindManifest, id, nb.netId, false, ManifestWindow)) {
             return false;
         }
         BuildingEntity build = enemy.GetComponent<BuildingEntity>();

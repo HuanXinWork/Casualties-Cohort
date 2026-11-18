@@ -66,6 +66,8 @@ internal static class BagPlace {
     }
 
     internal static void Tick() {
+        if (!Net.IsRunning)
+            return;
         if (Net.IsServer) {
             Sweep();
             return;
@@ -97,7 +99,7 @@ internal static class BagPlace {
 
     internal static bool BeforeAnnounce(SyncInfo si) {
         _blocked = false;
-        if (si == null || Net.IsServer)
+        if (!Net.IsRunning || si == null || Net.IsServer)
             return true;
         Item item = ItemOf(si);
         Transform parent = item != null && item.transform != null ? item.transform.parent : null;
@@ -346,7 +348,7 @@ internal static class BagPlace {
     }
 
     private static void Publish(Item item, GameObject box) {
-        if (!Net.IsServer || item == null)
+        if (!Net.IsRunning || !Net.IsServer || item == null)
             return;
         if (ItemSync.SuppressContainerWrite > 0) {
             if (ItemSync.ParentTestSwap)
@@ -375,7 +377,7 @@ internal static class BagPlace {
     }
 
     private static void Ensure(GameObject go) {
-        if (go == null || !Net.IsServer)
+        if (!Net.IsRunning || go == null || !Net.IsServer)
             return;
         if (NetObjectRegistry.IsRegistered(go) || !NetObjectRegistry.ObjectShouldBeSynced(go))
             return;

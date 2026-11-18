@@ -27,6 +27,7 @@ internal static partial class TrapClaim {
     const byte KindManifest = 8;
     const byte KindCryo = 9;
     const byte KindGlass = 10;
+    const byte KindTrader = 11;
 
     const float ContactReach = 32f;
     const float SpikeWindow = 2f;
@@ -87,7 +88,7 @@ internal static partial class TrapClaim {
     }
 
     static void Send(byte kind, knetid id, ushort mask) {
-        if (!Net.IsClient || (id.id == 0 && kind != KindGlass)) {
+        if (!Net.IsClient || id.id == 0) {
             return;
         }
         var writer = Net.CreateWriter(NetmsgId.SERVER_TrapClaim);
@@ -591,7 +592,13 @@ static class GroundGlass_OnCollision_TrapClaim {
         if (!Net.IsRunning) {
             return true;
         }
-        if (!TrapClaim.IsLocal(collision.collider, out Body body)) {
+        if (collision == null || collision.gameObject == null || !collision.gameObject.TryGetComponent(out Body body)) {
+            return false;
+        }
+        if (!Util.IsBodyLocal(body)) {
+            if (Net.IsServer && __instance.transform.position.y < body.transform.position.y) {
+                TrapClaim.GlassHostSawRemote(__instance);
+            }
             return false;
         }
         TrapClaim.GlassHitLocal(__instance, body);
@@ -620,7 +627,7 @@ static class SpikeStabberScript_OnTrigger_TrapClaim {
 [HarmonyPatch(typeof(CoilScript), nameof(CoilScript.OnCollisionEnter2D))]
 static class CoilScript_OnCollision_TrapClaim {
     static bool Prefix(CoilScript __instance, Collision2D collision) {
-        if (__instance.cooldown > 0f) {
+        if (!Net.IsRunning || __instance.cooldown > 0f) {
             return true;
         }
         return !TrapClaim.SkipRemote(collision.collider);
@@ -630,6 +637,9 @@ static class CoilScript_OnCollision_TrapClaim {
 [HarmonyPatch(typeof(MineScript), nameof(MineScript.Update))]
 static class MineScript_Update_TrapClaim {
     static void Prefix(MineScript __instance) {
+        if (!Net.IsRunning) {
+            return;
+        }
         if (Net.IsClient) {
             TrapClaim.TickMine(__instance);
         }
@@ -645,6 +655,9 @@ static class MineScript_Update_TrapClaim {
     }
 
     static void Postfix() {
+        if (!Net.IsRunning) {
+            return;
+        }
         TrapClaim.ClearPending();
     }
 }

@@ -62,10 +62,9 @@ public partial class WorldMP {
                 seed = WorldGeneration_GenerateWorld_MultiplayerPatch.firstworldgenparams.randomstate.GetHashCode();
                 ModHooks.NotifyWorldSeedApplied(ModHooks.PendingClientCustomWorldSeed, isHost: false);
             } else {
-                // 服务端在快照 LastBeforeGenerationState 前优先向外部存档模组查询是否有固定世界种子覆写
-                int defaultSeed = seed;
-                seed = TogetherSaveWorldApi.ResolveServerWorldSeed(depth, seed);
-                if (seed != defaultSeed || ModHooks.LastAppliedCustomWorldSeed != 0) {
+                // 服务端在快照 LastBeforeGenerationState 前优先向外部存档模组查询是否有固定世界种子覆写（基础种子广播，层种子初始化随机态）
+                if (TogetherSaveWorldApi.TryResolveServerWorldSeed(depth, out int resolvedLayerSeed)) {
+                    seed = resolvedLayerSeed;
                     UnityEngine.Random.InitState(seed);
                 }
 
@@ -129,12 +128,9 @@ public partial class WorldMP {
                 item.ServerPlayerState?.OnWorldgenStart();
             }
         } else {
-            // 单机直通模式下同样支持外部模组世界种子覆写
-            int defaultSeed = seed;
-            seed = TogetherSaveWorldApi.ResolveServerWorldSeed(depth, seed);
-            if (seed != defaultSeed
-                || (TogetherSaveWorldApi.ServerWorldSeedOverride != null
-                    && TogetherSaveWorldApi.ResolveServerWorldSeed(depth, defaultSeed ^ 1) == seed)) {
+            // 单机直通模式下同样支持外部模组单层世界种子覆写
+            if (TogetherSaveWorldApi.TryResolveServerWorldSeed(depth, out int resolvedSingleSeed)) {
+                seed = resolvedSingleSeed;
                 UnityEngine.Random.InitState(seed);
             }
         }
@@ -297,7 +293,7 @@ public partial class WorldMP {
             WorldChunkSync.TilemapSyncUpdate();
         }
 
-        if (Util.TryGetLocalBody(out var localBodyBefore) && !localBodyBefore.alive) {
+        if (Net.IsRunning && Util.TryGetLocalBody(out var localBodyBefore) && !localBodyBefore.alive) {
             UIInGame.StartSpectatorMode();
         }
 
@@ -318,7 +314,7 @@ public partial class WorldMP {
             PlayerCheckpoint.ReclaimGear(ScavPlayer.LocalPlayer.playerId);
         }
 
-        if (Util.TryGetLocalBody(out var localBodyAfter) && !localBodyAfter.alive) {
+        if (Net.IsRunning && Util.TryGetLocalBody(out var localBodyAfter) && !localBodyAfter.alive) {
             UIInGame.StartSpectatorMode();
         }
 
@@ -542,6 +538,9 @@ public partial class WorldMP {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.Clear))]
 static class WorldGeneration_Clear_InactiveBuildings {
     static void Prefix() {
+        if (!Net.IsRunning) {
+            return;
+        }
         BuildingEntity[] buildings = UnityEngine.Object.FindObjectsOfType<BuildingEntity>(true);
         for (int i = 0; i < buildings.Length; i++) {
             BuildingEntity building = buildings[i];

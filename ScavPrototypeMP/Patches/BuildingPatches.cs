@@ -18,6 +18,9 @@ namespace Together;
 [HarmonyPatch(typeof(OilPipeScript), nameof(OilPipeScript.Start))]
 static class OilPipeScript_Start_MultiplayerPatch {
     static void Postfix(OilPipeScript __instance) {
+        if (!Net.IsRunning) {
+            return;
+        }
         __instance.lastOilTime = Time.time + UnityEngine.Random.Range(1f, 30f);
         __instance.coolTime *= (Mathf.Max(1, ScavPlayer.ClientIdToPlayerDict.Count) + 0.5f);
     }

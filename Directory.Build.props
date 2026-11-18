@@ -3,7 +3,7 @@
   
 	<PropertyGroup>
 
-		<ModVersion>5.5.1</ModVersion>
+		<ModVersion>5.5.3</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 
 		<SlnRoot Condition="'$(SolutionDir)' != '' and '$(SolutionDir)' != '*Undefined*'">$(SolutionDir)</SlnRoot>
@@ -92,17 +92,8 @@
 		<DebugType>none</DebugType>
 		<Optimize>True</Optimize>
 	</PropertyGroup>
-	<PropertyGroup Condition="'$(BuildType)'=='Playtest' and '$(PlaytestVersion)' == ''">
-		<FullModVersion>$(ModVersion)fork$(BuildIdShort)</FullModVersion>
-	</PropertyGroup>
 	<PropertyGroup Condition="'$(BuildType)'=='Playtest' and '$(PlaytestVersion)' != ''">
 		<FullModVersion>$(ModVersion)$(PlaytestVersion)</FullModVersion>
-	</PropertyGroup>
-	<PropertyGroup Condition="'$(BuildType)'=='Debug'">
-		<FullModVersion>$(ModVersion)dev</FullModVersion>
-	</PropertyGroup>
-	<PropertyGroup Condition="!Exists('$(SlnRoot)ScavPrototypeMP\Proprietary\file.cs')">
-		<FullModVersion>$(ModVersion)fork$(BuildIdShort)</FullModVersion>
 	</PropertyGroup>
 
 	<Target Name="EnsureGamePathsResolved" BeforeTargets="PrepareForBuild">

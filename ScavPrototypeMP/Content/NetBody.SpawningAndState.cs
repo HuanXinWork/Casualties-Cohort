@@ -18,6 +18,10 @@ public partial class NetBody {
     protected bool last_alive = true;
     protected bool last_sleep = false;
     internal float soloSleepBonusStart = -1f;
+    internal bool handSwitched;
+    internal ushort handSwitchTick;
+    /// <summary>标记本躯体实例是否已带着有效 <c>syncBody</c> 触发过 <see cref="TogetherPanelApi.NotifyBodyReadyOrRebuilt"/>，根绝早产通知与重建多连发。</summary>
+    internal bool _notifiedBodyReady;
 
     public static void SpawnStarterPack(Body body) {
         if (WorldGeneration.world.totalTraveled <= 0
@@ -137,8 +141,9 @@ public partial class NetBody {
         if (nb != null && sb != null) {
             nb.syncBody = sb;
             _PRIV_NetIdToNetBody[sb.Id] = nb;
-            // 若场景预置角色在 Start 之后才绑定 SyncBody，补发一次带有效 netId 的就绪通知
-            if (nb.body != null && nb.isActiveAndEnabled) {
+            // 若场景预置角色在 Start 时尚未绑定 SyncBody（当时 _notifiedBodyReady 为 false），在此绑定完成后补发唯一一次带有效 netId 的就绪通知
+            if (nb.body != null && nb.isActiveAndEnabled && !nb._notifiedBodyReady) {
+                nb._notifiedBodyReady = true;
                 TogetherPanelApi.NotifyBodyReadyOrRebuilt(nb, nb.body.charType, isRebuild: false);
             }
         }

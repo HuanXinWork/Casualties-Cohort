@@ -52,10 +52,14 @@ public static class Body_WearWearable_MultiplayerPatch {
 [HarmonyPatch(typeof(Body), nameof(Body.SwapSlots))]
 static class Body_SwapSlots_MultiplayerPatch {
     static void Prefix() {
+        if (!Net.IsRunning)
+            return;
         MoveCommit.Push();
     }
 
     static void Postfix(Body __instance, int slot1, int slot2) {
+        if (!Net.IsRunning)
+            return;
         if (!__instance.IsBodyLocal()) {
             MoveCommit.Pop();
             return;
@@ -68,6 +72,8 @@ static class Body_SwapSlots_MultiplayerPatch {
 [HarmonyPatch(typeof(Container), nameof(Container.UnloadItem))]
 static class Container_UnloadItem_MultiplayerPatch {
     static void Prefix(Item item) {
+        if (!Net.IsRunning)
+            return;
         if (ItemSync.TryGetSyncInfo(item, out var si) && PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_TryPerformInventoryAction) {
             ItemSync.ItemContainerChanged.Add(si);
             si.SetIgnoreTimeForRoundTrip(1f);
@@ -75,6 +81,8 @@ static class Container_UnloadItem_MultiplayerPatch {
     }
 
     static void Postfix(Item item) {
+        if (!Net.IsRunning)
+            return;
         HeldSeat.Release(item);
     }
 }
@@ -274,6 +282,7 @@ static class PlayerCamera_CloseItemCustomizer_MultiplayerPatch {
         if (!Net.IsRunning || watched == null)
             return;
         ItemSync.PushCosmetics(watched);
+        ItemSync.PushFavourite(watched);
     }
 }
 
@@ -312,17 +321,83 @@ static class ItemCosmetics_NetReceivers {
 }
 #endif
 
-static class PlayerCamera_Favourite_MultiplayerPatch {
+static class ItemFavourite_NetReceivers {
     [ServerReceiver((byte)NetmsgId.SERVER_ItemFavourited)]
     static void Server_ItemFavourited(knetid clientId, NetDataReader reader) {
-        reader.Get(out knetid _);
-        reader.Get(out bool _);
+        reader.Get(out knetid id);
+        reader.Get(out bool fav);
+        if (!ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out ScavPlayer plr, out Body body))
+            return;
+        if (!ItemSync.TryGetItemSyncInfo(id, out SyncInfo si) || si == null || si.item == null)
+            return;
+
+        if (body != null && ItemSync.CheckIfBodyReachThisItem(si, body)) {
+            si.item.favourited = fav;
+            si.favourited.Value = fav;
+        } else if (plr != null && !plr.IsLocal) {
+            ItemSync.EchoFavourite(plr, si);
+        }
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_ItemFavourited, false)]
     static void Client_ItemFavourited(knetid _, NetDataReader reader) {
-        reader.Get(out knetid _);
-        reader.Get(out bool _);
+        reader.Get(out knetid id);
+        reader.Get(out bool fav);
+        ItemSync.ClearFavouritePending(id);
+        if (ItemSync.TryGetItemSyncInfo(id, out SyncInfo si) && si != null && si.item != null) {
+            si.item.favourited = fav;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.HandleWhileDragging))]
+static class PlayerCamera_Favourite_MultiplayerPatch {
+    static Item favWatch;
+    static bool favBefore;
+#if FULLGAME
+    static byte swatchBefore;
+#endif
+
+    static void Prefix(List<RaycastResult> uiCasts) {
+        favWatch = null;
+        if (!Net.IsRunning || uiCasts == null || (ConsoleScript.instance != null && ConsoleScript.instance.active))
+            return;
+#if FULLGAME
+        PlayerCamera cam = PlayerCamera.main;
+        if (cam != null && cam.itemCustomizer != null && cam.itemCustomizer.activeSelf)
+            return;
+#endif
+        if (!Input.GetKeyDown(KeyBinds.GetBind("favourite")))
+            return;
+
+        for (int i = 0; i < uiCasts.Count; i++) {
+            if (uiCasts[i].gameObject.TryGetComponent(out InvButton btn) && btn.Overlaps(uiCasts)) {
+                Item item = btn.GetItem();
+                if (item != null) {
+                    favWatch = item;
+                    favBefore = item.favourited;
+#if FULLGAME
+                    swatchBefore = (byte)Mathf.Clamp(item.colorSwatch, 0, 255);
+#endif
+                }
+                break;
+            }
+        }
+    }
+
+    static void Postfix() {
+        Item item = favWatch;
+        favWatch = null;
+        if (!Net.IsRunning || item == null)
+            return;
+        if (item.favourited != favBefore) {
+            ItemSync.PushFavourite(item);
+        }
+#if FULLGAME
+        if ((byte)Mathf.Clamp(item.colorSwatch, 0, 255) != swatchBefore) {
+            ItemSync.PushCosmetics(item);
+        }
+#endif
     }
 }
 
@@ -417,10 +492,14 @@ public static class LiquidTransfer_Finish_MultiplayerPatch {
 [HarmonyPatch(typeof(Body), nameof(Body.SwitchHands))]
 static class Body_SwitchHands_MultiplayerPatch {
     static void Prefix() {
+        if (!Net.IsRunning)
+            return;
         MoveCommit.Push();
     }
 
     static void Postfix(Body __instance) {
+        if (!Net.IsRunning)
+            return;
         if (!__instance.IsBodyLocal()) {
             MoveCommit.Pop();
             return;
@@ -454,6 +533,8 @@ static class Body_ThrowItem_MultiplayerPatch {
 
     static void Prefix(Body __instance, float force, ref SyncInfo __state) {
         __state = null;
+        if (!Net.IsRunning)
+            return;
         _thrown = __instance.GetItem(__instance.handSlot);
         MoveCommit.BeginThrow();
         if (!Multiplayer.IsNetworkActiveAndIsWorldGenerated())
@@ -474,6 +555,8 @@ static class Body_ThrowItem_MultiplayerPatch {
     }
 
     static void Postfix() {
+        if (!Net.IsRunning)
+            return;
         MoveCommit.EndThrow();
         Item thrown = _thrown;
         _thrown = null;
@@ -486,6 +569,8 @@ static class Body_ThrowItem_MultiplayerPatch {
 static class Body_DropItem_MultiplayerPatch {
     static void Prefix(Body __instance, Item item, out bool __state) {
         __state = false;
+        if (!Net.IsRunning)
+            return;
         try {
             __state = __instance != null && item != null && __instance.HoldingItem(item);
         } catch (Exception ex) {
@@ -494,6 +579,8 @@ static class Body_DropItem_MultiplayerPatch {
     }
 
     static void Postfix(Body __instance, Item item, bool __state) {
+        if (!Net.IsRunning)
+            return;
         SlotHold.Release(__instance, item);
         HeldSeat.Release(item);
         if (__state && __instance != null && __instance.IsBodyLocal())

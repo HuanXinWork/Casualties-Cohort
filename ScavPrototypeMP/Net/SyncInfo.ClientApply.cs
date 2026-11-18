@@ -37,6 +37,9 @@ namespace Together {
             }
 
             if (go == null) {
+                if (!Net.IsServer && TrapClaim.GlassBlocked(Id)) {
+                    return false;
+                }
                 if (!Util.IsWorldInstantiated() || string.IsNullOrEmpty(resourceId.Value)) {
                     return false;
                 }
@@ -692,6 +695,8 @@ namespace Together {
 #if FULLGAME
             } else if (b.TryGetComponent(out LaserDroneScript cryoDrone)) {
                 TrapClaim.ClientCryoFollowHost(cryoDrone);
+            } else if (b.TryGetComponent(out FanTrap fanTrap)) {
+                FanTrapSync.Apply(fanTrap, specialdata1.Value, specialdata2.Value);
 #endif
             } else if (go.transform.childCount == 1 && go.transform.GetChild(0) is Transform child && child != null && child.TryGetComponent(out GeyserScript geyser)) {
                 geyser.liquidType = specialdata1.Value;

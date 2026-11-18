@@ -99,6 +99,9 @@ public static partial class SavesystemPatch {
     }
 
     public static string ReplacementFor_Application_persistentDataPath() {
+        if (!Net.IsRunning) {
+            return Application.persistentDataPath;
+        }
         return savedatapathreplacement;
     }
 
@@ -173,12 +176,21 @@ public static partial class SavesystemPatch {
         return codes;
     }
 
+    internal static void DeleteSaveIfSingleplayer(string path) {
+        if (!Net.IsRunning && !string.IsNullOrEmpty(path) && File.Exists(path)) {
+            File.Delete(path);
+        }
+    }
+
     internal static IEnumerable<CodeInstruction> StripSaveDelete(IEnumerable<CodeInstruction> instructions) {
         var delete = AccessTools.Method(typeof(File), nameof(File.Delete), new Type[] { typeof(string) });
+        var gatedDelete = AccessTools.Method(typeof(SavesystemPatch), nameof(DeleteSaveIfSingleplayer));
         var codes = new List<CodeInstruction>(instructions);
         for (int i = 0; i < codes.Count; i++) {
-            if (delete != null && codes[i].Calls(delete))
-                codes[i] = new CodeInstruction(OpCodes.Pop);
+            if (delete != null && codes[i].Calls(delete)) {
+                codes[i].opcode = OpCodes.Call;
+                codes[i].operand = gatedDelete;
+            }
         }
         return codes;
     }

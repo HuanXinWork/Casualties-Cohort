@@ -110,7 +110,7 @@ static class Body_FirstEmptySlot_Hold
 {
 	static void Postfix(Body __instance, ref int? __result)
 	{
-		if (__instance == null || __instance.slots == null)
+		if (!Net.IsRunning || __instance == null || __instance.slots == null)
 			return;
 		if (__result.HasValue && !SlotHold.Other(__instance, __result.Value, null))
 			return;
@@ -123,7 +123,7 @@ static class Body_PickUpItem_Hold
 {
 	static void Postfix(Body __instance, Item item, int slot)
 	{
-		if (__instance != null && item != null && __instance.HoldingItem(item))
+		if (Net.IsRunning && __instance != null && item != null && __instance.HoldingItem(item))
 			SlotHold.Keep(__instance, slot, item);
 	}
 }

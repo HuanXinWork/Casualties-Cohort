@@ -21,6 +21,9 @@ namespace Together;
 [HarmonyPatch(typeof(Item), nameof(Item.OnCollisionEnter2D))]
 public static class Item_OnCollisionEnter2D_MultiplayerPatch {
     public static bool Prefix(Item __instance, Collision2D collision) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         if (collision.collider.TryGetComponent(out Item oitem)) { // item against item dont make the noise
             if (collision.relativeVelocity.magnitude < 20f) {
                 return false;

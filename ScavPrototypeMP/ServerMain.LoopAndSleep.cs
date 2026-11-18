@@ -288,6 +288,7 @@ public partial class ServerMain {
         };
 
         Multiplayer.RegisterCustomServerReceiver(CustomWireCommands.ChannelCustomCommand, RunClientCustomCommand);
+        LayerExitWhenHostDead.Register();
 
         {
             var t = "plrdeath";

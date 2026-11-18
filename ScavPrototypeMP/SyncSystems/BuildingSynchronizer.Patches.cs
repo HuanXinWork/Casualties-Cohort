@@ -17,6 +17,8 @@ namespace Together;
 [HarmonyPatch(typeof(BuildingEntity), nameof(BuildingEntity.Backgroundify))]
 public static class BuildingEntity_Backgroundify_MultiplayerPatch {
     static void Prefix(BuildingEntity __instance) {
+        if (!Net.IsRunning)
+            return;
         var tr = __instance.GetOrAddComponent<TrackerBuildingEntityBackgroundified>();
         tr.is_backgroundified = true;
     }
@@ -83,6 +85,8 @@ public static class BuildingEntity_Update_MultiplayerPatch {
     }
 
     static void Postfix(BuildingEntity __instance) {
+        if (!Net.IsRunning)
+            return;
         if (__instance != null)
             ChunkSleep.Watch(__instance);
 
@@ -125,6 +129,14 @@ public static class BuildingEntity_CheckDamage_MultiplayerPatch {
 #endif
 
 internal static class FullgameBodyOptimizeSkipPatch {
+    internal static bool ShouldMarkFreshDrop(BuildingEntity self) {
+        if (Net.IsRunning) {
+            return true;
+        }
+        return self != null && PlayerCamera.main != null && PlayerCamera.main.body != null
+            && Vector2.Distance(self.transform.position, PlayerCamera.main.body.transform.position) < 8f;
+    }
+
     internal static IEnumerable<CodeInstruction> Rewrite(IEnumerable<CodeInstruction> instructions) {
         var codes = new List<CodeInstruction>(instructions);
 
@@ -135,25 +147,28 @@ internal static class FullgameBodyOptimizeSkipPatch {
                 break;
             }
         }
-        if (ldstr < 0)
-            return codes;
 
-        int stloc = -1;
-        for (int k = ldstr; k < codes.Count; k++) {
-            if (codes[k].opcode == OpCodes.Stloc_1) {
-                stloc = k;
-                break;
+        if (ldstr >= 0) {
+            int stloc = -1;
+            for (int k = ldstr; k < codes.Count; k++) {
+                if (codes[k].opcode == OpCodes.Stloc_1) {
+                    stloc = k;
+                    break;
+                }
+            }
+            if (stloc >= 0) {
+                int beginning = stloc;
+                while (beginning >= 0 && codes[beginning].opcode != OpCodes.Ldarg_0) {
+                    beginning--;
+                }
+                if (beginning >= 0) {
+                    codes.RemoveRange(beginning + 1, stloc - 1 - beginning);
+                    codes.Insert(beginning + 1, new CodeInstruction(
+                        OpCodes.Call,
+                        AccessTools.Method(typeof(FullgameBodyOptimizeSkipPatch), nameof(ShouldMarkFreshDrop))));
+                }
             }
         }
-        if (stloc < 0)
-            return codes;
-
-        int beginning = stloc;
-        while (beginning >= 0 && codes[beginning].opcode != OpCodes.Ldarg_0) {
-            beginning--;
-        }
-        if (beginning < 0)
-            return codes;
 
         int bodyCheck = -1;
         for (int k = 0; k < codes.Count; k++) {
@@ -163,23 +178,15 @@ internal static class FullgameBodyOptimizeSkipPatch {
             }
         }
 
-        codes[beginning].opcode = OpCodes.Ldc_I4_1;
-        codes.RemoveRange(beginning + 1, stloc - 1 - beginning);
-
         if (bodyCheck >= 0 && bodyCheck + 1 < codes.Count &&
             (codes[bodyCheck + 1].opcode == OpCodes.Brtrue || codes[bodyCheck + 1].opcode == OpCodes.Brtrue_S)) {
             int brtrue = bodyCheck + 1;
             Label endLabel = (Label)codes[brtrue].operand;
-            int scopeEnd = -1;
-            for (int k = brtrue + 1; k < codes.Count; k++) {
-                if (codes[k].labels.Contains(endLabel)) {
-                    scopeEnd = k;
-                    break;
-                }
-            }
-            if (scopeEnd > brtrue) {
-                codes.RemoveRange(brtrue + 1, scopeEnd - brtrue - 1);
-            }
+            // 仅在联机运行时跳过原版单人刚体休眠判定（交由 Postfix 的 ChunkSleep 与 WorldInSimRange 接管），单机保留原版行为
+            codes.InsertRange(brtrue + 1, new[] {
+                new CodeInstruction(OpCodes.Call, AccessTools.PropertyGetter(typeof(Net), nameof(Net.IsRunning))),
+                new CodeInstruction(OpCodes.Brtrue, endLabel),
+            });
         }
 
         return codes;
@@ -197,6 +204,8 @@ public static class BuildingEntity_Start_MultiplayerPatch {
     public const string identified_bg_prefix = "KMPSR_";
 
     static void Prefix(BuildingEntity __instance) {
+        if (!Net.IsRunning)
+            return;
         __instance.GetOrAddComponent<TrackerBuildingEntityBackgroundified>();
     }
 
@@ -236,6 +245,9 @@ public static class BuildingEntity_Start_MultiplayerPatch {
         } else if (__instance.TryGetComponent(out BloodSuckerScript bloodSucker)) {
             var owro = __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
             owro.target = bloodSucker;
+        } else if (__instance.TryGetComponent(out FanTrap fanTrap)) {
+            var owro = __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
+            owro.target = fanTrap;
         } else if (__instance.id == "macrofleshrebuilder" && __instance.GetComponent<SurgicalDeviceBehavior>() == null) {
             __instance.gameObject.AddComponent<SurgicalDeviceBehavior>();
 #endif
@@ -267,6 +279,9 @@ public static class BuildingEntity_Start_MultiplayerPatch {
 [HarmonyPatch(typeof(SpiderHandler), nameof(SpiderHandler.PlayThreatMusic))]
 static class SpiderHandler_PlayThreatMusic_MultiplayerPatch {
     static bool Prefix(SpiderHandler __instance) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         return Camera.main != null && KM.DistanceCheck(Camera.main.transform.position, __instance.transform.position, __instance.seeDistance);
     }
 }
@@ -277,6 +292,9 @@ static class SpiderHandler_PlayThreatMusic_MultiplayerPatch {
 [HarmonyPatch(typeof(SpiderHandler), nameof(SpiderHandler.CheckForLimbDamage))]
 public static class SpiderHandler_CheckForLimbDamage_MultiplayerPatch {
     static bool Prefix(SpiderHandler __instance, Collision2D collision) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         if (NetObjectRegistry.TryGetSyncInfo(__instance.gameObject, out var si)) {
             Limb limb = Body.LimbFromObject(collision.gameObject, __instance.transform.position);
             if (limb != null && limb.TryGetNetBody(out var pb)) {
@@ -347,7 +365,7 @@ public static class SpiderHandler_CheckForLimbDamage_MultiplayerPatch {
     [HarmonyPatch(typeof(SpiderHandlerTBE), nameof(SpiderHandlerTBE.DamageLimb))]
     static class SpiderHandlerTBE_DamageLimb_MultiplayerPatch {
         static bool Prefix() {
-            return Net.IsServer;
+            return !Net.IsRunning || Net.IsServer;
         }
     }
 

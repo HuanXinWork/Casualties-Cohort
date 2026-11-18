@@ -53,6 +53,8 @@ namespace Together.MpConstants {
         public const string UnstableArm = "unstable_arm";
         public const string BloodsuckerTouch = "bloodsucker_touch";
         public const string ProsthesisPatch = "prosthesis_patch";
+        public const string LayerContinue = "layer_continue";
+        public const string LayerSave = "layer_save";
 
         // Fullgame 终局与剧情同步命令键
         public const string AscentGo = "ascent_go";

@@ -315,6 +315,9 @@ internal static class RPCManager_Initialize_MultiplayerPatch {
 [HarmonyPatch(typeof(Observer), nameof(Observer.RolledLastStand))]
 static class Observer_RolledLastStand_MultiplayerPatch {
     static bool Prefix(Observer __instance) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         try {
             if (Util.GetLocalBody().lastStandTime == 300) {
                 return true;
@@ -331,6 +334,9 @@ static class Observer_RolledLastStand_MultiplayerPatch {
 [HarmonyPatch(typeof(Observer), nameof(Observer.GunSuicide))]
 static class Observer_GunSuicide_MultiplayerPatch {
     static bool Prefix(Observer __instance) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         try {
             if (Util.GetLocalBody().totalHappiness <= -90) {
                 return true;

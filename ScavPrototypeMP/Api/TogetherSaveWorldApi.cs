@@ -134,27 +134,37 @@ namespace Together.Api {
             }
         }
 
-        internal static int ResolveServerWorldSeed(int depth, int defaultSeed) {
+        internal static bool TryResolveServerWorldSeed(int depth, out int layerSeed) {
+            layerSeed = 0;
             int? hookSeed = ModHooks.QueryCustomWorldSeed();
             if (hookSeed.HasValue && hookSeed.Value != 0) {
-                ModHooks.LastAppliedCustomWorldSeed = hookSeed.Value;
-                return hookSeed.Value;
+                int baseSeed = hookSeed.Value;
+                // LastAppliedCustomWorldSeed 保存基础种子随 Server_AnnounceSeed 发给客机；当前层随机态使用与 CuSaveManager 一致的层偏移公式
+                ModHooks.LastAppliedCustomWorldSeed = baseSeed;
+                int traveled = WorldGeneration.world != null ? WorldGeneration.world.totalTraveled : 0;
+                layerSeed = unchecked(baseSeed + traveled * 265443576);
+                return true;
             }
             ModHooks.LastAppliedCustomWorldSeed = 0;
             if (ServerWorldSeedOverride == null) {
-                return defaultSeed;
+                return false;
             }
             try {
                 int? custom = ServerWorldSeedOverride.Invoke(depth);
                 if (custom.HasValue) {
-                    ModHooks.LastAppliedCustomWorldSeed = custom.Value;
-                    return custom.Value;
+                    // ServerWorldSeedOverride(depth) 返回的是当前单层种子，严禁写入 LastAppliedCustomWorldSeed 导致客机二次叠加层偏移
+                    layerSeed = custom.Value;
+                    return true;
                 }
-                return defaultSeed;
+                return false;
             } catch (Exception ex) {
                 ModLog.Exception(LogDomain.Interop, nameof(ResolveServerWorldSeed), ex);
-                return defaultSeed;
+                return false;
             }
+        }
+
+        internal static int ResolveServerWorldSeed(int depth, int defaultSeed) {
+            return TryResolveServerWorldSeed(depth, out int layerSeed) ? layerSeed : defaultSeed;
         }
 
         internal static bool ShouldAllowHostExitToMainMenu(int livingCount) {

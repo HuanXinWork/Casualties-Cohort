@@ -230,11 +230,13 @@ public partial class ServerMain : MonoBehaviour {
             if (!pb.body.alive && Multiplayer.rules.LateJoinSpectate) {
                 // dont give them any spawn location, cuz they were moved to outside of the map
             } else {
-                if (plr.ServerPlayerState.did_give_spawn_location_from_a_save) {
+                // 优先检查外部存档管理模组（如 CuSaveManager）的回档精确坐标覆写，防止被 did_give_spawn_location_from_a_save 短路跳过
+                if (ModHooks.TryResolveSpawnOverride(plr, pb.body, out Vector2 overridePos)) {
                     plr.ServerPlayerState.did_give_spawn_location_from_a_save = false;
-                } else if (ModHooks.TryResolveSpawnOverride(plr, pb.body, out Vector2 overridePos)) {
                     pb.SetBodyPosition(overridePos);
                     PlayerCheckpoint.ReclaimGear(plr.playerId);
+                } else if (plr.ServerPlayerState.did_give_spawn_location_from_a_save) {
+                    plr.ServerPlayerState.did_give_spawn_location_from_a_save = false;
                 } else {
                     if (
                         !Body_PlaceBody_MultiplayerPatch.ShouldKeepLayerXOffset() // off, or doPod (everyone in the pod)
@@ -455,11 +457,34 @@ public partial class ServerMain : MonoBehaviour {
 #if FULLGAME
         return FullgameWorldCompat.IsAtLayerExit(body);
 #else
+        if (body == null || WorldGeneration.world == null) {
+            return false;
+        }
         if ((body.transform.position.y < (float)(0L - (long)WorldGeneration.world.halfHeight) + 3.1f)) {
             return true;
         }
         return false;
 #endif
+    }
+
+    public static bool HostBodyIsDead() {
+        if (!Net.IsRunning || Net.IsDedicatedServer) {
+            return false;
+        }
+        foreach (ScavPlayer plr in ScavPlayer.AllPlayers) {
+            if (plr != null && plr.IsHost) {
+                return !plr.IsAlive();
+            }
+        }
+        return false;
+    }
+
+    public static bool LocalPlayerAtLayerExit() {
+        PlayerCamera cam = PlayerCamera.main;
+        if (cam == null || cam.body == null || !cam.body.alive) {
+            return false;
+        }
+        return DidHeFinishTheLayer(cam.body);
     }
 
     public static bool CheckIfEveryoneIsSleeping() {

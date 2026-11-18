@@ -535,5 +535,7 @@
   "casualtiestogether_plrdeath_plrkill": "死于",
   "casualtiestogether_plrdeath_plrkill_using": "所使用的",
   "casualtiestogether_plrdeath_creaturekill": "死于",
-  "casualtiestogether_plrdeath_objkill": "死于"
+  "casualtiestogether_plrdeath_objkill": "死于",
+  "casualtiestogether_rule_name_TraderReviveAsSpecies": "商人复活时变为其物种",
+  "casualtiestogether_rule_desc_TraderReviveAsSpecies": "商人招募复活时，玩家变为该商人的物种。若开启复活保留技能，则保留原技能。若关闭，则使用新物种的基础技能。"
 }

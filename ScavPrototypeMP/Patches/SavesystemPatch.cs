@@ -23,6 +23,11 @@ public static class SaveSystem_HasSave_MultiplayerPatch {
     internal static bool force = false;
 
     private static bool Prefix(ref bool __result) {
+        if (!Net.IsRunning && !force) {
+            SavesystemPatch.PreserveSave = false;
+            SavesystemPatch.savedatapathreplacement = Application.persistentDataPath;
+            return true;
+        }
         if (force) {
             __result = true;
             force = false;
@@ -73,6 +78,11 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
 
     static bool Prefix() {
         wrote = false;
+        if (!Net.IsRunning && !force) {
+            SavesystemPatch.PreserveSave = false;
+            SavesystemPatch.savedatapathreplacement = Application.persistentDataPath;
+            return true;
+        }
         // 教学关或地图调试模式禁止覆盖真实 mp_save
         if (SavesystemPatch.PreserveSave && !force)
             return false;
@@ -216,6 +226,12 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
 
     static bool Prefix(ref bool __state) {
         deleteVanillaAfter = false;
+        if (!Net.IsRunning && !force) {
+            SavesystemPatch.PreserveSave = false;
+            SavesystemPatch.savedatapathreplacement = Application.persistentDataPath;
+            __state = SaveSystem.loadedRun;
+            return true;
+        }
         if (SavesystemPatch.PreserveSave && !force) {
             __state = false;
             SaveSystem.loadedRun = false;
@@ -251,6 +267,9 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
     }
 
     static void Postfix(ref bool __state) {
+        if (!Net.IsRunning && !force) {
+            return;
+        }
         if (force)
             PlayerCheckpoint.ReadCrafted(SavesystemPatch.savedatapathreplacement);
 

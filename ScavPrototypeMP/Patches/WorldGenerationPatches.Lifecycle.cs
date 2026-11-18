@@ -3,7 +3,11 @@ using System.Collections;
 using System.Collections.Generic;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
+using LiteNetLib;
+using LiteNetLib.Utils;
+using Together.Api;
 using Together.Diagnostics;
+using Together.MpConstants;
 using Unity.VisualScripting;
 using UnityEngine;
 
@@ -15,7 +19,7 @@ namespace Together;
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.UpdateWorld))]
 static class WorldGeneration_UpdateWorld_GeothermalSpawnRow_MultiplayerPatch {
     static void Prefix(WorldGeneration __instance) {
-        if (__instance == null || __instance.biomeDepth != 8 || !__instance.generatingWorld) {
+        if (!Net.IsRunning || __instance == null || __instance.biomeDepth != 8 || !__instance.generatingWorld) {
             return;
         }
         ScrubHotRock(__instance);
@@ -23,7 +27,7 @@ static class WorldGeneration_UpdateWorld_GeothermalSpawnRow_MultiplayerPatch {
 
     internal static bool InSpawnBand(in Vector2 worldPos) {
         WorldGeneration world = WorldGeneration.world;
-        if (world == null || world.biomeDepth != 8) {
+        if (!Net.IsRunning || world == null || world.biomeDepth != 8) {
             return false;
         }
         int chunk = WorldGeneration.CHUNKSIZE;
@@ -58,7 +62,7 @@ static class WorldGeneration_UpdateWorld_GeothermalSpawnRow_MultiplayerPatch {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.PlaceLiquids))]
 static class WorldGeneration_PlaceLiquids_GeothermalSpawnRow_MultiplayerPatch {
     static bool Prefix(WorldGeneration __instance, float perChunk, byte type, int maxFill) {
-        if (__instance == null || __instance.biomeDepth != 8 || type != 6 || FluidManager.main == null) {
+        if (!Net.IsRunning || __instance == null || __instance.biomeDepth != 8 || type != 6 || FluidManager.main == null) {
             return true;
         }
         int chunk = WorldGeneration.CHUNKSIZE;
@@ -80,7 +84,7 @@ static class WorldGeneration_PlaceLiquids_GeothermalSpawnRow_MultiplayerPatch {
 [HarmonyPatch(typeof(GeyserScript), "Start")]
 static class GeyserScript_Start_GeothermalSpawnRow_MultiplayerPatch {
     static void Postfix(GeyserScript __instance) {
-        if (__instance == null) {
+        if (!Net.IsRunning || __instance == null) {
             return;
         }
         if (WorldGeneration_UpdateWorld_GeothermalSpawnRow_MultiplayerPatch.InSpawnBand(__instance.transform.position)) {
@@ -143,6 +147,9 @@ public static class WorldGeneration_FinishWorldGeneration_MultiplayerPatch {
     }
 
     public static bool Prefix(ref IEnumerator __result) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         __result = WorldMP.Patched_FinishWorldGeneration();
         return false;
     }
@@ -156,6 +163,9 @@ public static class WorldGeneration_WorldPlacePlayer_MultiplayerPatch {
     }
 
     public static bool Prefix(ref IEnumerator __result) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         __result = WorldMP.Patched_WorldPlacePlayer();
         return false;
     }
@@ -164,7 +174,7 @@ public static class WorldGeneration_WorldPlacePlayer_MultiplayerPatch {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.IncreaseDepthByLayer))]
 static class WorldGeneration_IncreaseDepthByLayer_MultiplayerPatch {
     static void Postfix() {
-        if (!Net.IsServer) {
+        if (!Net.IsRunning || !Net.IsServer) {
             return;
         }
         foreach (var body in ScavPlayer.BodyToPlayerDict.Keys) {
@@ -287,19 +297,113 @@ public static class WorldGeneration_GenerateWorld_MultiplayerPatch {
     }
 
     public static bool Prefix(WorldGeneration __instance, ref IEnumerator __result) {
+        // 单机直通模式下若无自定义世界种子覆写委托，直接放行原版 GenerateWorld 协程
+        if (!Net.IsRunning && TogetherSaveWorldApi.ServerWorldSeedOverride == null) {
+            return true;
+        }
         __result = WorldMP.Patched_GenerateWorld(__instance);
         return false;
     }
 }
 
+/// <summary>
+/// 房主死亡后允许抵达出口的存活客机弹出过关/保存面板并向服务端发起 <c>layer_continue</c> / <c>layer_save</c> 请求（对齐 v5.5.3）。
+/// </summary>
+internal static class LayerExitWhenHostDead {
+    private static bool saveBusy;
+
+    public static void Register() {
+        ServerMain.ServerCustomCommandsDict[CustomWireCommands.LayerContinue] = (plr, cmd, args) => {
+            Accept(plr, save: false);
+        };
+        ServerMain.ServerCustomCommandsDict[CustomWireCommands.LayerSave] = (plr, cmd, args) => {
+            Accept(plr, save: true);
+        };
+        Multiplayer.OnSceneChangeOrWorldStartGenerate += () => {
+            saveBusy = false;
+        };
+    }
+
+    public static bool ClientAsk(WorldGeneration world, bool save) {
+        if (!ServerMain.HostBodyIsDead() || world == null) {
+            return false;
+        }
+#if FULLGAME
+        if (FullgameWorldCompat.IsAscentLayer()) {
+            world.savePanel.SetActive(false);
+            return true;
+        }
+#endif
+        if (!ServerMain.LocalPlayerAtLayerExit() || !ServerMain.CheckIfEnoughPeopleAreAtLayerFinish()) {
+            PlayerCamera.main?.DoAlert(Lang.Get("layerfinish_not_enough_plrs"));
+            world.savePanel.SetActive(false);
+            return true;
+        }
+        NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+        writer.Put(save ? CustomWireCommands.LayerSave : CustomWireCommands.LayerContinue);
+        Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
+        world.savePanel.SetActive(false);
+        return true;
+    }
+
+    private static void Accept(ScavPlayer plr, bool save) {
+        if (!Net.IsServer || plr == null || saveBusy || !ServerMain.HostBodyIsDead()
+            || plr.body == null || !plr.body.alive || !ServerMain.DidHeFinishTheLayer(plr.body)) {
+            return;
+        }
+        WorldGeneration world = WorldGeneration.world;
+        if (world == null || world.doingRegen || world.generatingWorld || !world.worldExists) {
+            return;
+        }
+#if FULLGAME
+        if (FullgameWorldCompat.IsAscentLayer()) {
+            return;
+        }
+#endif
+        if (ServerMain.CheckIfEnoughPeopleAreAtLayerFinish()) {
+            if (save) {
+                saveBusy = true;
+                world.SaveAndExit();
+            } else {
+                world.ContinueRun();
+            }
+        }
+    }
+}
+
+[HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.Update))]
+internal static class WorldGeneration_Update_DeadHostExitPanel {
+    private static void Postfix(WorldGeneration __instance) {
+        if (!Net.IsRunning || __instance == null || __instance.savePanel == null
+            || !ServerMain.HostBodyIsDead() || __instance.doingRegen || __instance.generatingWorld || !__instance.worldExists) {
+            return;
+        }
+        bool show = ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
+#if FULLGAME
+        if (FullgameWorldCompat.IsAscentLayer()) {
+            show = false;
+        }
+#endif
+        if (show && Net.IsClient && !ServerMain.LocalPlayerAtLayerExit()) {
+            show = false;
+        }
+        if (__instance.savePanel.activeSelf != show) {
+            __instance.savePanel.SetActive(show);
+        }
+    }
+}
+
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.SaveAndExit))]
 public static class WorldGenerationSaveAndExitPatch {
-    public static bool Prefix() {
+    public static bool Prefix(WorldGeneration __instance) {
         if (Net.IsRunning) {
             if (PlayerCamera.main?.body != null) {
                 PlayerCamera.main.body.forceWalk = false;
             }
             if (Net.IsClient) {
+                if (LayerExitWhenHostDead.ClientAsk(__instance, save: true)) {
+                    return false;
+                }
                 PlayerCamera.main?.DoAlert(Lang.Get("wait_for_host"));
                 return false;
             }
@@ -327,6 +431,9 @@ public static class WorldGeneration_ContinueRun_MultiplayerPatch {
         }
 #endif
         if (Net.IsClient) {
+            if (LayerExitWhenHostDead.ClientAsk(__instance, save: false)) {
+                return false;
+            }
             PlayerCamera.main?.DoAlert(Lang.Get("wait_for_host"));
             return false;
         }
@@ -339,7 +446,7 @@ public static class WorldGeneration_ContinueRun_MultiplayerPatch {
 
         bool doingRegen = (bool)Traverse.Create(__instance).Field("doingRegen").GetValue();
         if (!doingRegen && !__instance.generatingWorld && __instance.worldExists) {
-            Multiplayer.DoMultiplayerStatusMessageLog("Host pressed ContinueRun button and everything checks out!");
+            Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("host_continue_run_status"));
             Chat.Server_ChatAnnouncement("<key:host_continue_run_announcement>");
             PlayerCheckpoint.WriteLayerTransition();
 
@@ -373,6 +480,9 @@ public static class WorldGeneration_UpdateAmbientLight_MultiplayerPatch {
     }
 
     static void Postfix(WorldGeneration __instance) {
+        if (!Net.IsRunning) {
+            return;
+        }
         var worldState = ClientMain.ServerWorldState;
         float intensity = worldState != null
             ? worldState.ambientLightIntensity.Value

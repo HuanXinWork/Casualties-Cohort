@@ -301,6 +301,9 @@ public static class PlayerCamera_ToggleWoundView_MultiplayerPatch {
     }
 
     public static bool Prefix(PlayerCamera __instance, bool sound) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         WoundView_UpdateView_MultiplayerPatch.lastHealerList.Clear();
         WoundView_UpdateView_MultiplayerPatch.ClearHealerUI();
 
@@ -362,6 +365,9 @@ public static class PlayerCamera_ToggleWoundView_MultiplayerPatch {
     }
 
     public static Exception Finalizer(PlayerCamera __instance, Exception __exception) {
+        if (!Net.IsRunning) {
+            return __exception;
+        }
         if (__instance != null && __instance.mainView != null && __instance.woundView != null) {
             __instance.mainView.SetActive(!__instance.woundView.activeSelf);
         }

@@ -357,6 +357,9 @@ static class WaterContainerItem_UpdateCondition_Clamp {
 [HarmonyPatch(typeof(Item), nameof(Item.HandleDecay))]
 static class Item_HandleDecay_MultiplayerPatch {
     static bool Prefix(Item __instance) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         if (Net.IsClient && __instance is not null && NetObjectRegistry.IsRegistered(__instance.gameObject)) {
             return false;
         }

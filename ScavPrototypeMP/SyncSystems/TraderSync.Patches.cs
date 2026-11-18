@@ -16,6 +16,37 @@ namespace Together;
 /// <summary>
 /// 商人挥砍、交涉、买卖、初次会面及小憩等交互方法的 Harmony 联机补丁集。
 /// </summary>
+internal static class TraderSwingHitTracker {
+    private static readonly float[] MuscleBefore = new float[16];
+
+    internal static void RememberLimbs(Body body) {
+        for (int i = 0; i < MuscleBefore.Length; i++) {
+            MuscleBefore[i] = -1f;
+        }
+        if (body == null || body.limbs == null) {
+            return;
+        }
+        for (int i = 0; i < body.limbs.Length && i < MuscleBefore.Length; i++) {
+            if (body.limbs[i] != null) {
+                MuscleBefore[i] = body.limbs[i].muscleHealth;
+            }
+        }
+    }
+
+    internal static ushort FreshHurt(Body body) {
+        if (body == null || body.limbs == null) {
+            return 0;
+        }
+        for (int i = 0; i < body.limbs.Length && i < MuscleBefore.Length; i++) {
+            Limb limb = body.limbs[i];
+            if (limb != null && MuscleBefore[i] >= 0f && limb.muscleHealth < MuscleBefore[i] - 0.5f) {
+                return (ushort)(1 << i);
+            }
+        }
+        return 0;
+    }
+}
+
 [HarmonyPatch(typeof(TraderScript), nameof(TraderScript.Swing))]
 static class TraderScript_Swing_MultiplayerPatch {
     private static bool Prefix(TraderScript __instance, out bool __state) {
@@ -25,17 +56,38 @@ static class TraderScript_Swing_MultiplayerPatch {
             return true;
         }
         if (Net.IsClient) {
-            return false;
+            if (__instance == null || !__instance.hostile) {
+                return false;
+            }
+            Body localBody = Util.GetLocalBody();
+            if (localBody == null) {
+                return false;
+            }
+            TraderSwingHitTracker.RememberLimbs(localBody);
+            __state = true;
+            return true;
         }
         TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
         tt.bgo.SetNearestBody();
+        Body focused = tt.focused_body;
+        if (focused != null && focused.TryGetNetBody(out NetBody nb) && nb.IsPlayer && !Util.IsBodyLocal(focused)) {
+            return false;
+        }
         __state = true;
         return true;
     }
 
     static void Postfix(TraderScript __instance, bool __state) {
-        if (!Net.IsRunning || !Net.IsServer || !__state)
+        if (!Net.IsRunning || !__state) {
             return;
+        }
+        if (Net.IsClient) {
+            ushort mask = TraderSwingHitTracker.FreshHurt(Util.GetLocalBody());
+            if (mask != 0) {
+                TrapClaim.AfterLocalTrader(__instance, mask);
+            }
+            return;
+        }
 
         TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
         Body target = tt.focused_body;

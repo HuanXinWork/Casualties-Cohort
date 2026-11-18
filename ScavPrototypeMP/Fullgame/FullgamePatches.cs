@@ -64,6 +64,8 @@ public class FullgameMultiplayerPatcher : CasualtiesTogetherSingleton {
     bool _lastCutsceneActive;
     bool _cutsceneArmed;
 #endif
+    static float _vanillaMineDismemberChance = -1f;
+    bool _mpMineChanceApplied;
 
     void Start() {
 #if RELEASE
@@ -71,11 +73,33 @@ public class FullgameMultiplayerPatcher : CasualtiesTogetherSingleton {
             return;
         }
 #endif
-        Traverse.Create(Constants.DefaultMineExplosionParams).Field("dismemberChance").SetValue(0.15f);
+        if (_vanillaMineDismemberChance < 0f && Constants.DefaultMineExplosionParams != null) {
+            _vanillaMineDismemberChance = Traverse.Create(Constants.DefaultMineExplosionParams).Field("dismemberChance").GetValue<float>();
+        }
+        SyncMineDismemberChance();
     }
 
-#if FULLGAME
+    void SyncMineDismemberChance() {
+#if RELEASE
+        if (Util.GameIsDemo()) {
+            return;
+        }
+#endif
+        if (Constants.DefaultMineExplosionParams == null || _vanillaMineDismemberChance < 0f) {
+            return;
+        }
+        bool wantMp = Net.IsRunning;
+        if (wantMp == _mpMineChanceApplied) {
+            return;
+        }
+        _mpMineChanceApplied = wantMp;
+        Traverse.Create(Constants.DefaultMineExplosionParams).Field("dismemberChance")
+            .SetValue(wantMp ? 0.15f : _vanillaMineDismemberChance);
+    }
+
     void Update() {
+        SyncMineDismemberChance();
+#if FULLGAME
         if (!Net.IsRunning || !Util.IsInWorld() || WorldGeneration.world == null) {
             _cutsceneArmed = false;
             return;
@@ -96,7 +120,10 @@ public class FullgameMultiplayerPatcher : CasualtiesTogetherSingleton {
         NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_CutsceneActive);
         writer.Put(active);
         Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
+#endif
     }
+
+#if FULLGAME
 
     [ClientReceiver((byte)NetmsgId.CLIENT_CutsceneActive)]
     static void Client_CutsceneActive(knetid _, NetDataReader reader) {

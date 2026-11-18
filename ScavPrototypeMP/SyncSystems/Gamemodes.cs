@@ -268,7 +268,8 @@ public class BattleRoyale : GamemodeBase {
 
 
             if (
-                Multiplayer.rules.AutoExitWhenAllDied && 
+                Multiplayer.rules.AutoExitWhenAllDied &&
+                !ModHooks.QueryBlockAutoExitOnAllDead() &&
                 ServerMain._ded_server_switch_counter > 10 &&
                 lviing.Count <= 1
             ) {

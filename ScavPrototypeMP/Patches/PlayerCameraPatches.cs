@@ -137,7 +137,11 @@ static class GlobalDark_Update_DontEatClicks {
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.LateUpdate))]
 public static class PlayerCamera_LateUpdate_TraderHold {
     private static void Postfix(PlayerCamera __instance) {
+        if (!Net.IsRunning) {
+            return;
+        }
         TraderPinLog.Hold(__instance);
+        PlayerCamera_SwitchHands_MultiplayerPatch.RefreshHandIcon(__instance);
         UpdateSpectatorDepthMeter(__instance);
     }
 
@@ -180,15 +184,6 @@ public static class PlayerCamera_Update_MultiplayerPatch {
     }
 
     static void Postfix(PlayerCamera __instance) {
-        if (__instance.mainView != null && !__instance.mainView.activeSelf) {
-            bool panel = __instance.woundView != null && __instance.woundView.activeSelf;
-            if (!panel || PlayerCamera_ToggleWoundView_MultiplayerPatch.HealthTargetGone()) {
-                PlayerCamera_ToggleWoundView_MultiplayerPatch.CloseHealthPanel(__instance);
-            }
-        } else if (UIInGame.interaction_menu_target_body != null && UIInGame.interaction_menu_target_body.syncBody == null) {
-            UIInGame.StopPlayerInteractionMenu();
-        }
-
         if (Con._DEV_HIDEHUD) {
             GlobalDark.main?.SetTooltip(("", ""));
             __instance.hoverSquare.enabled = false;
@@ -196,6 +191,17 @@ public static class PlayerCamera_Update_MultiplayerPatch {
 
         if (!Net.IsRunning) {
             return;
+        }
+
+        PlayerCamera_SwitchHands_MultiplayerPatch.RefreshHandIcon(__instance);
+
+        if (__instance.mainView != null && !__instance.mainView.activeSelf) {
+            bool panel = __instance.woundView != null && __instance.woundView.activeSelf;
+            if (!panel || PlayerCamera_ToggleWoundView_MultiplayerPatch.HealthTargetGone()) {
+                PlayerCamera_ToggleWoundView_MultiplayerPatch.CloseHealthPanel(__instance);
+            }
+        } else if (UIInGame.interaction_menu_target_body != null && UIInGame.interaction_menu_target_body.syncBody == null) {
+            UIInGame.StopPlayerInteractionMenu();
         }
 
         if (!prev_radialOpen && __instance.radialOpen) {
@@ -368,8 +374,19 @@ static class PlayerCamera_UIOverrideTryPickupFromWorld_MultiplayerPatch {
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.ToMainMenu))]
 static class PlayerCamera_ToMainMenu_MultiplayerPatch {
     static bool Prefix(PlayerCamera __instance) {
+        // 全员阵亡时若外部存档模组（如 CuSaveManager 自动回档读秒）拦截自动退出，必须在清空网络实体与广播退房前直接中止
+        if (Net.IsRunning && Net.IsServer && ModHooks.QueryBlockAutoExitOnAllDead()) {
+            return false;
+        }
+
+        // 单机直通模式下不触碰联机注册表，更不得置 showMultiplayerMenu = true 污染单机主菜单
+        if (!Net.IsRunning) {
+            Con.UnNoclip();
+            return true;
+        }
+
         // 房主在仍有存活队友时触发返回主菜单前，先询问外部模组（如 CuSaveManager）确认钩子，返回 false 则直接中止退回主菜单
-        if (Net.IsRunning && Net.IsServer) {
+        if (Net.IsServer) {
             int livingCount = ScavPlayer.AllLivingPlayers.Count;
             if (livingCount > 0 && !TogetherSaveWorldApi.ShouldAllowHostExitToMainMenu(livingCount)) {
                 return false;
@@ -384,22 +401,20 @@ static class PlayerCamera_ToMainMenu_MultiplayerPatch {
         NetObjectRegistry.UnregisterAllObjectsButKeepInventory();
         Con.UnNoclip();
 
-        if (Net.IsRunning) {
-            UIInGame.StopSpectatorMode();
+        UIInGame.StopSpectatorMode();
 
-            if (Net.IsClient) {
-                if (!Multiplayer.showMultiplayerMenu) {
-                    Multiplayer.DoMultiplayerStatusMessageLog("Disconnecting because local player returned to main menu.");
-                    Multiplayer._JustDisconnect();
-                    Chat.LogMessage(Chat.NAMELABEL_LOCALSYSTEM, "Left the server.");
-                }
-            } else {
-                Multiplayer.DoMultiplayerStatusMessageLog("Announcing GoBackToMainMenu.");
-                var writer = Net.CreateWriter(NetmsgId.CLIENT_GoBackToMainMenu);
-                writer.Put(0);
-                Net.Server_SendToClientsVeryReliable(writer, ServerMain.AllClientIdsExceptHost);
-                Chat.Server_ChatAnnouncement("<key:host_gotomainmenu>");
+        if (Net.IsClient) {
+            if (!Multiplayer.showMultiplayerMenu) {
+                Multiplayer.DoMultiplayerStatusMessageLog("Disconnecting because local player returned to main menu.");
+                Multiplayer._JustDisconnect();
+                Chat.LogMessage(Chat.NAMELABEL_LOCALSYSTEM, "Left the server.");
             }
+        } else {
+            Multiplayer.DoMultiplayerStatusMessageLog("Announcing GoBackToMainMenu.");
+            var writer = Net.CreateWriter(NetmsgId.CLIENT_GoBackToMainMenu);
+            writer.Put(0);
+            Net.Server_SendToClientsVeryReliable(writer, ServerMain.AllClientIdsExceptHost);
+            Chat.Server_ChatAnnouncement("<key:host_gotomainmenu>");
         }
 
         Multiplayer.showMultiplayerMenu = true;

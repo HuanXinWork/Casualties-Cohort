@@ -52,6 +52,12 @@ internal static class PlayerCameraNetworkReceivers {
 
         if (ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr) && plr.IsAlive()) {
             plr.body.handSlot = handSlot;
+            NetBody netBody = plr.netBody;
+            if (netBody != null) {
+                netBody.handSwitched = true;
+                netBody.handSwitchTick = Net.ServerTick;
+                netBody.syncBody?.WriteBodyData();
+            }
             if (DebugHelp._DEV_VISUALISE_NET_EVENTS) {
                 DebugHelp.OnNetEvent(plr.body.transform.position, $"S: PlayerCamera_SwitchHands {handSlot}");
             }
@@ -63,16 +69,13 @@ internal static class PlayerCameraNetworkReceivers {
         }
     }
 
-    [ClientReceiver((byte)NetmsgId.CLIENT_PlayerCamera_SwitchHandsRelay)]
+    [ClientReceiver((byte)NetmsgId.CLIENT_PlayerCamera_SwitchHandsRelay, true)]
     static void Client_PlayerCamera_SwitchHands(knetid _, NetDataReader reader) {
         reader.Get(out knetid who);
         reader.Get(out byte handSlot);
 
-        if (ScavPlayer.TryGetPlayerFromClientId(who, out var plr) && plr.body && !plr.IsLocal) {
-            plr.body.handSlot = handSlot;
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) {
-                DebugHelp.OnNetEvent(plr.body.transform.position, $"C: PlayerCamera_SwitchHandsRelay {handSlot}");
-            }
+        if (ScavPlayer.TryGetPlayerFromClientId(who, out var plr) && plr.body && !plr.IsLocal && DebugHelp._DEV_VISUALISE_NET_EVENTS) {
+            DebugHelp.OnNetEvent(plr.body.transform.position, $"C: PlayerCamera_SwitchHandsRelay {handSlot}");
         }
     }
 
@@ -102,6 +105,10 @@ internal static class PlayerCameraNetworkReceivers {
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.UpdateWearables))]
 public static class PlayerCamera_UpdateWearables_MultiplayerPatch {
     static void Prefix(PlayerCamera __instance, ref Body __state) {
+        __state = __instance.body;
+        if (!Net.IsRunning) {
+            return;
+        }
         if (__instance.body == null) {
             __instance.body = Util.GetLocalBody();
         }
@@ -112,6 +119,9 @@ public static class PlayerCamera_UpdateWearables_MultiplayerPatch {
     }
 
     static void Postfix(PlayerCamera __instance, ref Body __state) {
+        if (!Net.IsRunning) {
+            return;
+        }
         __instance.body = __state;
     }
 }
@@ -119,6 +129,9 @@ public static class PlayerCamera_UpdateWearables_MultiplayerPatch {
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.TryPerformRadialAction))]
 public static class PlayerCamera_TryPerformRadialAction_MultiplayerPatch {
     static bool Prefix(ref bool __result) {
+        if (!Net.IsRunning) {
+            return true;
+        }
         if (InvButton_get_body_MultiplayerPatch.focused_body != null) {
             __result = false;
             return false;
@@ -280,7 +293,31 @@ public static class PlayerCamera_HandleInput_MultiplayerPatch {
 public static class PlayerCamera_SwitchHands_MultiplayerPatch {
     public static void Postfix() {
         if (Net.IsRunning && PlayerCamera.main?.body != null) {
-            Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_SwitchHands, (ushort)PlayerCamera.main.body.handSlot, true);
+            RefreshHandIcon(PlayerCamera.main);
+            Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_SwitchHands, (ushort)PlayerCamera.main.body.handSlot, false);
+            if (!Net.IsServer) {
+                ClientMain.Client_SendCharacterSyncPacket();
+            }
+        }
+    }
+
+    internal static void RefreshHandIcon(PlayerCamera pc) {
+        if (!Net.IsRunning || pc == null || pc.body == null || pc.handSwapImage == null || pc.handSwapSprites == null) {
+            return;
+        }
+        int handSlot = pc.body.handSlot;
+        if (handSlot < 0 || handSlot >= pc.handSwapSprites.Length) {
+            return;
+        }
+        Sprite sprite = pc.handSwapSprites[handSlot];
+        if (sprite != null) {
+            if (pc.handSwapImage.sprite != sprite) {
+                pc.handSwapImage.sprite = sprite;
+            }
+            int otherSlot = handSlot == 0 ? 1 : 0;
+            if (otherSlot < pc.handSwapSprites.Length && pc.handSwapImage.overrideSprite == pc.handSwapSprites[otherSlot]) {
+                pc.handSwapImage.overrideSprite = null;
+            }
         }
     }
 }
@@ -391,6 +428,27 @@ static class PlayerCamera_ToggleTradeMenu_MultiplayerPatch {
         ModLog.Info($"Recruiting {traderSi} to respawn {availablePlr}", LogDomain.Trader);
 
         availablePlr.Server_RespawnCharacter(traderSi.transformPosition + Vector2.up * 1.5f, true);
+#if FULLGAME
+        if (Multiplayer.rules.TraderReviveAsSpecies && traderTracker.og != null) {
+            int traderSpecies = CharacterSpawn.ClampChar(traderTracker.og.character);
+            if (availablePlr.body == null || availablePlr.body.charType != traderSpecies) {
+                List<Item> preservedInventory = null;
+                if (Multiplayer.rules.RespawnKeepInventory && availablePlr.body != null) {
+                    preservedInventory = availablePlr.body.GetAllItemsThorough();
+                    availablePlr.body.Body_DropAllItems();
+                }
+                CharacterSpawn.ServerForceSwapSpecies(availablePlr, traderSpecies, !Multiplayer.rules.RespawnKeepSkills, dropInventory: false);
+                if (preservedInventory != null && availablePlr.body != null) {
+                    for (int i = 0; i < preservedInventory.Count; i++) {
+                        Item keptItem = preservedInventory[i];
+                        if (keptItem != null) {
+                            availablePlr.body.AutoPickUpItem(keptItem);
+                        }
+                    }
+                }
+            }
+        }
+#endif
         int giftCount = Math.Min(traderTracker.og.items.Count, RANDOM_ITEMS_TO_GIVE_AFTER_RESPAWN);
         for (int i = 0; i < giftCount; i++) {
             int randIndex = UnityEngine.Random.Range(0, traderTracker.og.items.Count);
@@ -594,27 +652,30 @@ public static class PlayerCamera_SetIrradiateIntensity_MultiplayerPatch {
     }
 }
 
+internal static class UnconsciousTimeScaleGate {
+    internal static void SetTimeScaleIfSingleplayer(PlayerCamera cam, PlayerCamera.SpeedType speed) {
+        if (!Net.IsRunning && cam != null) {
+            cam.SetTimeScale(speed);
+        }
+    }
+}
+
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.HandleUnconsciousScreen))]
 public static class vyosna_dawn_HandleUnconsciousScreen_Patch {
     private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
         List<CodeInstruction> list = new(instructions);
-        List<int> occurrencesToRemove = new() { 0, 1 };
+        MethodInfo gatedMethod = AccessTools.Method(typeof(UnconsciousTimeScaleGate), nameof(UnconsciousTimeScaleGate.SetTimeScaleIfSingleplayer));
+        List<int> occurrencesToRedirect = new() { 0, 1 };
         int currentOccurrence = 0;
-        int i = 0;
-        while (i < list.Count && currentOccurrence < occurrencesToRemove.Count) {
+        for (int i = 0; i < list.Count && currentOccurrence < occurrencesToRedirect.Count; i++) {
             if (list[i].ToString().Contains(nameof(PlayerCamera.SetTimeScale))
-                && occurrencesToRemove.Contains(currentOccurrence)
-                && list[i].operand is MethodBase method) {
-                list[i].opcode = OpCodes.Nop;
-                list[i].operand = null;
-                int goBackwards = method.GetParameters().Length + (method.IsStatic ? 0 : 1);
-                for (int key = i; key >= i - goBackwards; key--) {
-                    list[key].opcode = OpCodes.Nop;
-                    list[key].operand = null;
-                }
+                && occurrencesToRedirect.Contains(currentOccurrence)
+                && list[i].operand is MethodBase) {
+                // 仅在联机下抑制昏迷自动时间加速；单机模式下保留原版 SetTimeScale 调用
+                list[i].opcode = OpCodes.Call;
+                list[i].operand = gatedMethod;
                 currentOccurrence++;
             }
-            i++;
         }
         return list;
     }

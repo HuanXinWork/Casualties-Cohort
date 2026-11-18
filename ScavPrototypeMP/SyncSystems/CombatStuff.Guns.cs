@@ -56,7 +56,9 @@ public class TrackerGunScript : BaseComponentTracker<GunScript> {
 
     protected override void TrackerAwake() {
         shotsPerFire = og.shotsPerFire;
-        og.shotsPerFire = 0;
+        if (Net.IsRunning) {
+            og.shotsPerFire = 0;
+        }
         InvokeRepeating(nameof(SlowUpdate), 1.0f, 0.1f);
     }
 
@@ -210,6 +212,17 @@ public class TrackerGunScript : BaseComponentTracker<GunScript> {
 /// 枪械开火结算、命中列表上报与广播回放业务类（独立于 <see cref="HarmonyPatch"/> 类以避免 <c>Harmony003</c>）。
 /// </summary>
 internal static class GunCombatSync {
+    /// <summary>
+    /// 供 <see cref="GunScript.Fire"/> 与 <see cref="GunScript.UnloadMag"/> 的 Transpiler 调用：
+    /// 单机模式下直接返回原版 <c>gun.body</c> 以避免挂载 <see cref="TrackerGunScript"/> 清零 <c>shotsPerFire</c>；联机模式下走追踪器覆写躯体。
+    /// </summary>
+    internal static Body ResolveGunBody(GunScript gun) {
+        if (!Net.IsRunning) {
+            return gun.body;
+        }
+        return gun.GetOrAddComponent<TrackerGunScript>().GetBody();
+    }
+
     public static Vector2 RollVerticalSpread(GunScript gun) {
         return gun.transform.up * (UnityEngine.Random.Range(-1f, 1f) * gun.verticalSpread);
     }
@@ -455,9 +468,7 @@ public static class GunScript_Fire_MultiplayerPatch {
         int i = 0;
         bool patched = false;
 
-        var getComponentMethod = typeof(ComponentHolderProtocol).GetMethod(nameof(ComponentHolderProtocol.GetOrAddComponent), BindingFlags.Static | BindingFlags.Public);
-        var getComponentGeneric = getComponentMethod.MakeGenericMethod(typeof(TrackerGunScript));
-        var getBodyMethod = typeof(TrackerGunScript).GetMethod(nameof(TrackerGunScript.GetBody), BindingFlags.Public | BindingFlags.Instance);
+        var resolveBodyMethod = AccessTools.Method(typeof(GunCombatSync), nameof(GunCombatSync.ResolveGunBody));
 
         while (i < instructionList.Count) {
             var code = instructionList[i];
@@ -465,8 +476,9 @@ public static class GunScript_Fire_MultiplayerPatch {
                 && code.operand is MethodInfo method
                 && method.Name == "get_body"
                 && method.DeclaringType == typeof(GunScript)) {
-                yield return new CodeInstruction(OpCodes.Call, getComponentGeneric);
-                yield return new CodeInstruction(OpCodes.Callvirt, getBodyMethod);
+                var callInst = new CodeInstruction(OpCodes.Call, resolveBodyMethod);
+                callInst.MoveLabelsFrom(code);
+                yield return callInst;
                 i++;
                 patched = true;
             } else {
@@ -483,6 +495,9 @@ public static class GunScript_Fire_MultiplayerPatch {
 
     public static void Prefix(GunScript __instance, ref GunScript __state) {
         __state = GunScript_Update_MultiplayerPatch.current_executing_gun;
+        if (!Net.IsRunning) {
+            return;
+        }
         if (__state == null) {
             GunScript_Update_MultiplayerPatch.current_executing_gun = __instance;
         }
@@ -494,6 +509,9 @@ public static class GunScript_Fire_MultiplayerPatch {
     }
 
     static void Postfix(GunScript __instance, bool suicide, ref GunScript __state) {
+        if (!Net.IsRunning) {
+            return;
+        }
         try {
             GunCombatSync.CheckForHitsAndTellServer(__instance, suicide);
         } catch (Exception ex) {
@@ -508,6 +526,9 @@ public static class GunScript_JamChance_MultiplayerPatch {
     public static bool ForceJam = false;
 
     static void Postfix(GunScript __instance, ref float __result) {
+        if (!Net.IsRunning) {
+            return;
+        }
         var gst = __instance.GetOrAddComponent<TrackerGunScript>();
         if (gst.body != null && gst.body.TryGetNetBody(out var nb) && !nb.IsLocal) {
             if (ForceJam) {
@@ -527,6 +548,9 @@ public static class GunScript_UnloadMag_MultiplayerPatch {
     }
 
     public static void Prefix(GunScript __instance) {
+        if (!Net.IsRunning) {
+            return;
+        }
         __instance.GetOrAddComponent<TrackerGunScript>();
     }
 }
@@ -536,6 +560,9 @@ public static class GunScript_Update_MultiplayerPatch {
     public static GunScript current_executing_gun = null;
 
     static void Prefix(GunScript __instance) {
+        if (!Net.IsRunning) {
+            return;
+        }
         current_executing_gun = __instance;
     }
 
@@ -547,6 +574,9 @@ public static class GunScript_Update_MultiplayerPatch {
 [HarmonyPatch(typeof(GunScript), nameof(GunScript.Start))]
 public static class GunScript_Start_MultiplayerPatch {
     static void Postfix(GunScript __instance) {
+        if (!Net.IsRunning) {
+            return;
+        }
         __instance.GetOrAddComponent<TrackerGunScript>();
         __instance.lastRacked = __instance.racked;
     }

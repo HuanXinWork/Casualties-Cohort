@@ -502,6 +502,8 @@ namespace Together {
 #if FULLGAME
                 } else if (b.TryGetComponent(out LaserDroneScript cryoDrone)) {
                     specialdata1.Value = cryoDrone.open.ToByte();
+                } else if (b.TryGetComponent(out FanTrap fanTrap)) {
+                    FanTrapSync.Write(fanTrap, this);
 #endif
                 } else if (go.transform.childCount == 1 && go.transform.GetChild(0) is Transform child && child != null && child.TryGetComponent(out GeyserScript geyser)) {
                     specialdata1.Value = geyser.liquidType;

@@ -535,5 +535,7 @@
   "casualtiestogether_plrdeath_plrkill": "fue asesinado por",
   "casualtiestogether_plrdeath_plrkill_using": "usando",
   "casualtiestogether_plrdeath_creaturekill": "fue comido por",
-  "casualtiestogether_plrdeath_objkill": "murió por"
+  "casualtiestogether_plrdeath_objkill": "murió por",
+  "casualtiestogether_rule_name_TraderReviveAsSpecies": "Revivir como la especie del mercader",
+  "casualtiestogether_rule_desc_TraderReviveAsSpecies": "Al reclutar, el jugador revivido pasa a ser la especie de ese mercader. Si Conservar habilidades al revivir está activo, conserva sus habilidades. Si no, recibe las habilidades base de la nueva especie."
 }

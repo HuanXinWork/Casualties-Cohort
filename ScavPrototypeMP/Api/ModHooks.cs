@@ -64,6 +64,9 @@ namespace Together {
 
         internal static bool TryResolveSpawnOverride(ScavPlayer plr, Body body, out Vector2 targetPos) {
             targetPos = default;
+            if (!RestoreSavedPositionsOnLoad) {
+                return false;
+            }
             Func<ushort, string, Body, Vector2?> callback = SpawnPositionOverride;
             if (callback == null || plr == null || body == null) {
                 return false;

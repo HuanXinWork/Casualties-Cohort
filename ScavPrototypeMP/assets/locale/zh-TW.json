@@ -457,5 +457,7 @@
   "casualtiestogether_plrdeath_plrkill": "死於",
   "casualtiestogether_plrdeath_plrkill_using": "所使用的",
   "casualtiestogether_plrdeath_creaturekill": "死於",
-  "casualtiestogether_plrdeath_objkill": "死於"
+  "casualtiestogether_plrdeath_objkill": "死於",
+  "casualtiestogether_rule_name_TraderReviveAsSpecies": "商人復活時變為其物種",
+  "casualtiestogether_rule_desc_TraderReviveAsSpecies": "商人招募復活時，玩家變為該商人的物種。若開啟重生保留技能，則保留原技能。若關閉，則使用新物種的基礎技能。"
 }
