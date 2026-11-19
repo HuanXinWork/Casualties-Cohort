@@ -52,3 +52,5 @@ omnisharp.json
 
 # Local Tools
 tools/FakePlayer/
+docs/
+.history

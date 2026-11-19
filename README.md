@@ -1,204 +1,129 @@
+# Casualties: Cohort for Casualties: Unknown
 
+> 《未知伤亡》联机合作模组，[Casualties: Together](https://github.com/creaturefeaturelarry/casualties-together) 的分支版本
+> 协议：LGPL-2.1，与上游一致
 
-<div align="center">
-<a href="https://www.nexusmods.com/scavprototype/mods/67">
-<img alt="Casualties: Together" src="https://github.com/creaturefeaturelarry/casualties-together/raw/refs/heads/main/.github/ct6.png">
-</a>
-</div>
+English guide: see [README.en.md](README.en.md)
 
-<div align="center">
+## 简介
 
-[![Stars](https://img.shields.io/github/stars/creaturefeaturelarry/casualties-together?style=flat-square&label=Stars&color=orange&logo=github)](https://github.com/creaturefeaturelarry/casualties-together/releases)
-[![Latest Release](https://img.shields.io/github/v/release/creaturefeaturelarry/casualties-together?style=flat-square&include_prereleases&logo=github&label=Version)](https://github.com/creaturefeaturelarry/casualties-together/releases/latest)
-[![Github Downloads](https://img.shields.io/github/downloads/creaturefeaturelarry/casualties-together/total?style=flat-square&color=blue&logo=github&label=Downloads)](https://github.com/creaturefeaturelarry/casualties-together/releases)
-[![Nexus Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjimmyking9999999%2FMetadata-generator%2Fmain%2Fbadges%2Fcasualties-together.json&style=flat-square)](https://www.nexusmods.com/scavprototype/mods/67?tab=files)
-[![Game Version](https://img.shields.io/badge/Game_Version-v1.0.2-darkgreen?style=flat-square&logo=steam)](https://store.steampowered.com/app/4576510)
-</div>
+Casualties: Cohort 是 Casualties: Together 的分支，保留上游的插件 GUID 与程序集名（`CasualtiesMP`），因此现有的配套模组无需修改即可继续使用。
 
+与原版相比，本分支做了这些事：
 
+- 全量模块化拆分，单文件控制在 800 行以内，Harmony 警告清零
+- 提供 `Together.Api` 门面与 `Together.ModHooks` 静态入口，配套模组不必碰内部实现
+- 对齐 v5.5.3 线上协议，补齐单机直通守卫
+- Debug / Release 双模日志，附带结构化通信诊断
+- 修复上游既有缺陷：UseAck、罐头食品、枪械、义肢、蜱虫巢、兴奋剂、Unicode、俄语本地化、拖拽 Finalizer
 
+网络设计限制与上游一致：没有客户端预测、没有网络所有权、没有确定性随机、没有反作弊。本模组只提供一套简单的合作体验。
 
-### Online Multiplayer Co-op mod for game ["Casualties: Unknown"](https://store.steampowered.com/app/4576510)<br/>
+## 开发状态
 
+重构仍在进行中，部分模块尚未完成验证。当前构建可以正常使用，但与上游的差异还在逐步收敛，遇到问题请提 issue。
 
-[![Casualties: Together](https://img.shields.io/badge/Casualties%3A%20Together%20Mod%20Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/SA6H7mA6De)   [![Target Planet](https://img.shields.io/badge/Official%20Casualties%3A%20Unknown%20Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.com/channels/955738554129063947/1470206122844618802)
+## 安装
 
+### 环境要求
 
-## Support developer:
+- 游戏：[Casualties: Unknown](https://store.steampowered.com/app/4576510)
+- [BepInEx 5.4.23.5](https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.5/BepInEx_win_x64_5.4.23.5.zip)
 
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/casualtiestogether)
+### 步骤
 
+1. 把 `BepInEx` 解压到游戏根目录
+2. 把本模组发布包里的 `mod` 文件夹内容解压到游戏根目录
+3. 通过 Steam 启动游戏
+4. 主菜单会出现联机相关按钮
 
+返回单人模式：`设置 > 通用 > 停用联机模组`
 
-# Install Guide:
+Linux / Proton：在启动项加入 `WINEDLLOVERRIDES="winhttp=n,b" %command%`
 
-### Requirements:
-Download Game: https://store.steampowered.com/app/4576510<br/>
-Download BepInEx: https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.5/BepInEx_win_x64_5.4.23.5.zip<br/>
-Download Co-op Mod: [https://www.nexusmods.com/scavprototype/mods/67](https://www.nexusmods.com/scavprototype/mods/67?tab=files)<br/>
+如果 Steam 大厅不工作，请从 Steam 库启动游戏，不要用快捷方式。
 
-<details><summary>
+### 注意事项
 
-### Click to show full install guide.
-</summary>
+- 装不上就再试一次
+- 建议使用稳定的网络连接
+- 遇到崩溃或异常，责任在本模组，与游戏原作者无关
 
-1. Download all the prerequisistes ^^^^^^ 
+## 功能
 
-2. Go to the game root directory.
-    - In Steam, Right click on the game.
-    - Click `Manage > Browse local files`
+- Steam 大厅
+- 带游戏内音效的真实语音
+- 鼠标中键标记位置
+- 右键与队友交互、查看、治疗
+- 靠近队友共享体温
+- 死亡后进入旁观模式
+- 禁用睡觉，饥饿与口渴减缓
+- 搬运失能队友
+- 未植入芯片选项按个人计算
+- 可运行专用服务器（非真无头）
 
+所有规则由主机通过控制台调整（`rule <名称> <值>`）。
 
-3. Unzip `BepInEx*.zip` into the game root directory.
+## 完整功能列表
 
-4. Unzip `MPMod*.zip`, open `mod` folder and move the contents into the game root directory.
+- 禁用睡觉（对应规则 `EnableSleep`）
+- 禁用时间流速按钮（不建议重新打开）
+- 玩家互伤通过 `PVP` 规则开启
+- 鼠标中键为其他玩家高亮光标位置
+- 靠近其他玩家共享体温
+- 文字与语音聊天取决于角色的语言能力，消息会带上相同的失真效果
+- MP3 播放器变成手提音响，不再替换背景音乐
+- 右键玩家打开交互菜单
+  - 查看健康面板并执行相关操作
+  - 查看对方背包并取走物品
+  - 对他人使用可用物品（喂食）
+- 玩家死亡后进入旁观模式
+  - 存活玩家到达下一层后，所有死亡玩家重生
+  - 若规则 `Permadeath` 为真，则禁用重生
+  - 可以从商人处复活
+- 前往下一层需要半数以上玩家抵达终点
+  - 落后的玩家超时会被击杀
+  - 只有主机会收到继续提示
+  - 钻探舱同理，所有玩家必须在舱内
+  - 由规则 `LayerFinishConditionPlayerPercent` 调整
+- 玩家血量回复与衰减经过调整
+  - 附近没有同伴时死亡更快（规则 `AdditionalHealthDecay`）
+  - 血量回复速度提升（规则 `AdditionalHealthRegen`）
+- 可以吃掉死去的队友
+  - 规则 `CanAmputateHealthyPlayers` 允许从活人身上取肢体
+- 商人的初次印象由队伍中最好看的那位决定
 
-5. Now it should look like this 
-   
-![alt text](https://github.com/creaturefeaturelarry/casualties-together/raw/refs/heads/main/.github/tut_1.png)
+以上规则只有主机可以通过 `rule [规则名] [新值]` 修改。
 
-7. Go back to steam and click **Play**.
+## 控制台
 
-8. In main menu, multiplayer related buttons should appear.
-    - (To go back to singleplayer you need to press the `Deactivate MP Mod` button in `Settings > General`!)
+主机开启全部命令：
 
-9. (optional) Upvote/Share/Support the mod.
+```
+rule sv_cheats 1
+```
 
-<details>
-<summary>FOR LINUX USERS</summary>
+客户端需要管理员权限（`adminpriv <玩家>` 或 `adminpriv-password`）才能使用服务器控制台命令。
 
-1. Add this to launch options `WINEDLLOVERRIDES="winhttp=n,b" %command%`
-    - It tells proton to load BepInEx.
+## 构建
 
-</details>
-</details>
-<br>
+```
+python scripts/prepare_workspace.py
+```
 
+脚本会复制游戏并安装 BepInEx。推荐使用 Visual Studio 2022，打开 `CasualtiesCohort.sln` 编译，按 F5 启动。多开游戏实例需要手动或通过脚本启动。
 
+## 致谢
 
-    
-# Warning:
-If installation doesn't work, Try again.
- - Or cry at people in "Casualties: Together" discord server: [https://discord.gg/FrBX3srzzG](https://discord.gg/FrBX3srzzG)
+原始致谢在游戏内「关于」菜单中。
 
-Make sure to launch the game through Steam Library if Steam Lobbies don't work.
+- [Krokosha666](https://github.com/Krokosha666) — 原始作者（已隐退）
+- [Creature](https://github.com/creaturefeaturelarry) — 上游维护者
+- [Dune](https://github.com/Jyan-sei) — 同步、优化
+- [VtLoader](https://github.com/vtloader) — 缺陷修复、本地化
+- Gary the Cat、Dannad、Meow、Jimmyking、Kidihh、Dawn、mayzmae、ItsVoidSK — 贡献
+- 以及上游项目的大量测试者与支持者
 
-It's recommended to have good internet connection for optimal experience.
+## 协议
 
-
-!!!<br>
-IF YOU ENCOUNTER ANY GLITCHES, CRASHES, OTHER ISSUES - BLAME THE MOD, NOT THE ORIGINAL DEVELOPER OF THE GAME<br>
-!!!
-
-To go back to singleplayer you need to press the `Deactivate MP Mod` button in `Settings > General`!
-
-
-# Features:
-Steam Lobbies<br>
-Real voice chat with in-game effects.<br/>
-Middle Mouse Button to point at a location.<br>
-Right click to interact and heal other players.<br> 
-Stay close to others to share body temperature.<br>
-Spectator mode when dead.<br>
-Sleeping is disabled.<br>
-Hunger and thirst is slowed down.<br>
-Carrying incapacitated players.<br>
-Any dead players respawns at next layer.<br>
-Unchipped option is individual.<br>
-Most of these features can be tweaked in the in-game console.<br>
-Also this mod can run as a dedicated server. (its not real headless)<br>
-
-There's no client prediction.<br>
-There's no network ownership.<br>
-There's no deterministic RNG.<br>
-There's no anticheat. <br>
-This mod only adds a simple co-op experience to the game.<br>
-
-
-
-
-
-# Full feaure list:
-
-Disabled sleeping. (tied to the rule "EnableSleep" )<br>
-Disabled time scale buttons. (don't try re-enable this actually)<br>
-Player friendly fire can be enabled with the "PVP" rule.<br>
-Middle mouse click to highlight a location at your cursor, for the other players to see.<br>
-Stand close to other players to share body temperature.<br>
-
-Text chat and Voice chat are dependent on your characters ability to speak, same distortions apply to your messages.<br>
-MP3 Player now is a boombox instead of replacing background music.<br>
-
-Right click on a player to open a player interaction context menu.
- - Inspect health panel and perform any actions.
- - Inspect their inventory and take their items. 
- - Use any usable item on them (Feeding).
-
-When a player dies, they are put into spectator mode.
- - All dead players respawn after living players reach the next level.
- - (if rule "Permadeath" is true, respawns are disabled)
- - Player can be revived from traders.
-   
-To continue to the next layer, half of all players must reach the end. 
- - Straggles will get killed if they take too long.
- - Only the Host gets prompted to continue the run.
- - DrillPod works the same, all players must be in the pod to continue.
- - (tweaked by the rule "LayerFinishConditionPlayerPercent")
-
-Player health regen and decay is tweaked.
- - Death is much faster if there are no comrades nearby. ( tweaked by the "AdditionalHealthDecay" rule )
- - Health regeneration is boosted. ( tweaked by the "AdditionalHealthRegen" rule)
-
-All these rules can be changed only by the Host by running the command "rule [rule name] [new value]"<br>
-
-You can eat your friends after they died. 
- - The rule "CanAmputateHealthyPlayers" allows you to steal limbs of living players.
-
-Traders first impression reputation is calculated from the prettiest of the bunch.<br>
-
-
-
-# How to enable all console commands:
-
-The Host must enter this console command:<br>
-```rule sv_cheats 1```<br>
-**To let Client into server console mode they need "admin" privilege.**<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;**(Given by "adminpriv [player]" or "adminpriv-password")**
-
-
-
-# Building:
-
-Run script `scripts/prepare_workspace.py`
-
-It copies the game and installs bepinex.
-
-**Visual Studio 2022** is recommended.
-
-Open the project and compile it.
-
-Hit F5
-
-You have to launch multiple instances of the game manually or using scripts.
-
-Uuhh <img src="https://media1.tenor.com/m/qPyvaruhJsYAAAAd/drooling-cat-lord-im-one.gif" width="32" height="32">   
-
-
-# Credits:
-
-Credits are listed in "About" menu inside the mod.<br>
-[Creature](https://github.com/creaturefeaturelarry) Current owner.<br>
-[Krokosha666](https://github.com/Krokosha666) Original developer. (Retired)
-
-### Contributors:
-[Dune](https://github.com/Jyan-sei) - Sync, Optimizations<br>
-[VtLoader](https://github.com/vtloader) - Bug fixes, Locale<br>
-[Gary the Cat](https://github.com/Garythecat89), [Dannad](https://github.com/danxnader), [Meow](https://github.com/SprightlyHawk8), [Jimmyking](https://github.com/jimmyking9999999), [Kidihh](https://github.com/Kidihh), [Dawn](https://github.com/hehdawn), [mayzmae](https://github.com/mayzmae), ItsVoidSK<br>
-...And a bunch of playtesters
-
-### Supporters:
- 
-```Bleh :P, EthanTheProtogen, RoyMartini, Jazun, Alexx__, vega, Zmechol1337, plasterjello, Doctor Callico, vivikat, Ariyah, killthebudget, _stuck_, ShaoAZ, JameisonAus, Kidi, BluBerryToaster, Katomou, Nemean_Lion732, Locko2265, Trenchburner, TheBoathead, Diesel, Malbyte, KaliVasquez, Mitirich, Shiro, ChrisTheDragon```
-
-
-
+LGPL-2.1，详见 [LICENSE](LICENSE)。本分支与上游使用同一协议。
