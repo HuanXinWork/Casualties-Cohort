@@ -18,6 +18,11 @@ public class HeaterMultiplayerRewrite : MonoBehaviour {
     private const float FallbackRadius = 10f;
     private const float TickInterval = 0.5f;
 
+    static readonly List<NetBody> _near = new List<NetBody>();
+    static Heater[] _cached = Array.Empty<Heater>();
+    static float _nextScan;
+    static float _nextApply;
+
     Heater heater;
 
     void Awake() {
@@ -25,32 +30,70 @@ public class HeaterMultiplayerRewrite : MonoBehaviour {
     }
 
     void Update() {
-        if (Net.IsRunning && !Net.IsServer)
+        if (!Net.IsRunning || !Net.IsServer)
             return;
 
         if (heater == null) {
             heater = GetComponent<Heater>();
-            if (heater == null)
-                return;
         }
+        Apply(heater);
+    }
+
+    // 结构空调常挂在子物体上，房主不在视野内时 OnWillRenderObject 永不触发，且区块休眠会关闭整个结构；
+    // 由此全局轮询兜底结算所有非激活/未挂载重写组件的温控源并同步给范围内玩家。
+    public static void Tick() {
+        if (!Net.IsRunning || !Net.IsServer || !SharedMain.LocalWorldIsGenerated)
+            return;
+
+        float now = Time.unscaledTime;
+        if (now < _nextApply)
+            return;
+
+        _nextApply = now + TickInterval;
+        if (now >= _nextScan) {
+            _cached = UnityEngine.Object.FindObjectsByType<Heater>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            _nextScan = now + 2f;
+        }
+        for (int i = 0; i < _cached.Length; i++) {
+            Heater heater = _cached[i];
+            if (heater == null)
+                continue;
+            if (heater.gameObject.activeInHierarchy && heater.GetComponent<HeaterMultiplayerRewrite>() != null)
+                continue;
+            Apply(heater);
+        }
+    }
+
+    // 单机模式（!Net.IsRunning）下原版 Heater.OnWillRenderObject 未被拦截，此处必须提前返回，避免无 NetBody 时空刷 heater.lastTime 吞掉原版温控冷却
+    public static void Apply(Heater heater) {
+        if (!Net.IsRunning || !Net.IsServer || heater == null || !heater.enabled)
+            return;
 
         float radius = heater.maxDistance;
         if (radius <= 0.01f)
             radius = FallbackRadius;
 
-        if (heater.enabled && Time.time - heater.lastTime > TickInterval) {
-            heater.lastTime = Time.time;
+        if (Time.time - heater.lastTime <= TickInterval)
+            return;
 
-            foreach (NetBody nb in NetBody.GetBodiesInRadius(heater.transform.position, radius)) {
-                Body body = nb.body;
-                if (body == null)
-                    continue;
+        heater.lastTime = Time.time;
+        _near.Clear();
+        NetBody.GetBodiesInRadius(heater.transform.position, radius, _near);
+        for (int i = 0; i < _near.Count; i++) {
+            NetBody nb = _near[i];
+            if (nb == null)
+                continue;
+            Body body = nb.body;
+            if (body == null)
+                continue;
 
-                if ((heater.isHeater && body.temperature < heater.desiredTemp)
-                    || (!heater.isHeater && body.temperature > heater.desiredTemp)) {
-                    body.temperature = Mathf.Lerp(body.temperature, heater.desiredTemp, heater.tempLerpStrength);
-                }
-            }
+            bool towards = (heater.isHeater && body.temperature < heater.desiredTemp)
+                || (!heater.isHeater && body.temperature > heater.desiredTemp);
+            if (!towards)
+                continue;
+
+            body.temperature = Mathf.Lerp(body.temperature, heater.desiredTemp, heater.tempLerpStrength);
+            MedicalSync.Server_QueueSendCharacterHealth(nb, true);
         }
     }
 }
@@ -168,6 +211,61 @@ public class OnWillRenderObject_ForceForMPComponent : MonoBehaviour {
 
     Renderer[] _childRenderers;
     MethodInfo _willRender;
+    bool _wantSim;
+
+    void OnEnable() {
+        Camera.onPostRender += AfterCam;
+    }
+
+    void OnDisable() {
+        Camera.onPostRender -= AfterCam;
+    }
+
+    // 商人精灵位于子节点上，主摄像机不会回调根节点的 OnWillRenderObject；服务端在有存活玩家靠近或敌对时保持唤醒并推进仇恨与挥击
+    void TickTrader(TraderScript trader) {
+        if (trader == null || !Net.IsRunning) {
+            _wantSim = false;
+            return;
+        }
+        if (Net.IsClient) {
+            Body local = Util.GetLocalBody();
+            bool close = local != null && Vector2.Distance(trader.transform.position, local.transform.position) < 12f;
+            _wantSim = trader.hostile || close;
+            return;
+        }
+        Body near = TrackerTrader.ClosestLiving(trader.transform.position);
+        bool hostClose = near != null && Vector2.Distance(trader.transform.position, near.transform.position) < 12f;
+        if (trader.hostile || hostClose) {
+            if (!gameObject.activeSelf)
+                gameObject.SetActive(true);
+            ChunkSleep.Ignore(gameObject);
+        }
+        _wantSim = trader.hostile || hostClose || (tracker != null && tracker.isVisible);
+        TraderScript_OnWillRender_PinLog.EnsureClimb(trader);
+    }
+
+    void AfterCam(Camera cam) {
+        if (cam != Camera.main || !_wantSim || !(target is TraderScript trader))
+            return;
+        if (TraderScript_OnWillRender_PinLog.RanThisFrame(trader))
+            return;
+        InvokeWillRender();
+    }
+
+    void InvokeWillRender() {
+        if (_willRender == null) {
+            _willRender = target.GetType().GetMethod(
+                "OnWillRenderObject",
+                BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.FlattenHierarchy);
+        }
+        if (_willRender == null)
+            return;
+        try {
+            _willRender.Invoke(target, null);
+        } catch (Exception ex) {
+            ModLog.Exception(LogDomain.World, $"ForceOnWillRenderObject({target?.name})", ex);
+        }
+    }
 
     void CacheRenderers() {
         if (target == null || (_childRenderers != null && _childRenderers.Length > 0))
@@ -188,6 +286,10 @@ public class OnWillRenderObject_ForceForMPComponent : MonoBehaviour {
     }
 
     void Update() {
+        if (target is TraderScript trader) {
+            TickTrader(trader);
+            return;
+        }
         if (Net.IsClient) {
             if (target is GunmineScript gun) {
                 TrapClaim.TickClientGun(gun);

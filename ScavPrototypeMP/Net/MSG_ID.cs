@@ -218,7 +218,7 @@ public enum NetmsgId : byte {
     CLIENT_EndingCredit,
     SERVER_EndingCredit,
     CLIENT_BlueHeartPulse,        // host pulse clock for the cargo-location ring
-    ___27, // 保留枚举序号 221 占位（原未启用的 SkinReplacer 槽位），确保后续 222..224 消息字节值与线上协议一致
+    ___27, // 保留消息字节值 252 占位（原未启用的 SkinReplacer 槽位），确保后续 253..255 消息字节值与线上协议一致
     CLIENT_CrystalBag,          // one-shot local-auth bag (visuals + effect ids). was ___28.
     SERVER_RequestCrystalBag,   // late-join / miss request. was ___29.
     CLIENT_BloodSuckerSucc,       // host BeginSucc -> clients tentacle + scream FX. was ___30.

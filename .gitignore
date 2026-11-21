@@ -18,7 +18,24 @@ CU_Fullgame/*
 CU_Demo/*
 CUDecomp_Fullgame/*
 CUDecomp_Demo/*
-libs/
+# Runtime dependencies: only track the 7 redistributable DLLs and license files
+!libs/
+libs/*
+!libs/dlls/
+libs/dlls/*
+!libs/dlls/K4os.Compression.LZ4.dll
+!libs/dlls/LiteEntitySystem.dll
+!libs/dlls/LiteNetLib.dll
+!libs/dlls/OpusSharp.Core.dll
+!libs/dlls/opus.dll
+!libs/dlls/RefMagic.dll
+!libs/dlls/System.Runtime.CompilerServices.Unsafe.dll
+!libs/dlls/LICENSE_*
+
+# Stripped metadata reference stubs for zero-secret CI builds
+!references/
+references/*
+!references/*.dll
 randomassscreenshots/
 MPReleaseCasualtiesUnknown*
 KrokoshaCasualtiesMPCheats*

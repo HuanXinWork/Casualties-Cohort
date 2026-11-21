@@ -106,14 +106,7 @@ internal static partial class TrapClaim {
             if (i > 15) {
                 break;
             }
-            Vector2 origin = param.position;
-            Vector2 toLimb = (Vector2)limb.transform.position - origin;
-            float span = toLimb.magnitude;
-            bool standingOnIt = span <= 4f;
-            if (!standingOnIt && span > 0.01f) {
-                origin += toLimb / span * 1.5f;
-            }
-            if ((!standingOnIt && Physics2D.Linecast(origin, limb.transform.position, PhysicsLayers.GroundMask))
+            if (GroundBlocks(param.position, limb.transform.position)
                 || !KM.DistanceCheck(param.position, limb.transform.position, param.range)) {
                 i++;
                 continue;
@@ -167,10 +160,31 @@ internal static partial class TrapClaim {
         }
     }
 
+    // 先沿射线步进走出爆心所在的地形格，再检测与目标肢体之间是否真有实体墙遮挡
+    static bool GroundBlocks(Vector2 origin, Vector2 target) {
+        int mask = PhysicsLayers.GroundMask;
+        Vector2 to = target - origin;
+        float span = to.magnitude;
+        if (span <= 0.05f) {
+            return false;
+        }
+        Vector2 dir = to / span;
+        float walked = 0f;
+        while (walked < span && walked < 6f && Physics2D.OverlapPoint(origin, mask) != null) {
+            origin += dir * 0.5f;
+            walked += 0.5f;
+        }
+        if (walked >= span) {
+            return false;
+        }
+        return Physics2D.Linecast(origin, target, mask).collider != null;
+    }
+
     internal static void HostBoom(ExplosionParams param) {
         if (param == null) {
             return;
         }
+        blastInGround = Physics2D.OverlapPoint(param.position, PhysicsLayers.GroundMask) != null;
         var id = pendingBoom;
         pendingBoom = default;
         if (id.id == 0) {
@@ -279,7 +293,11 @@ internal static partial class TrapClaim {
             return;
         }
         foreach (var nb in NetBody.all_instances) {
-            if (nb == null || nb.body == null || nb.IsBodyLocal()) {
+            if (nb == null || nb.body == null) {
+                continue;
+            }
+            // 掩埋爆心时连同房主本地碰撞体一起暂隐，交由 PublishLocals 走步进射线结算，避免原版 Overlap 与补偿结算叠加双重伤害
+            if (nb.IsBodyLocal() && !blastInGround) {
                 continue;
             }
             var cols = nb.body.GetComponentsInChildren<Collider2D>(true);
@@ -316,9 +334,13 @@ internal static partial class TrapClaim {
             if (nb == null || nb.body == null || !nb.IsBodyLocal()) {
                 continue;
             }
-            if (KM.DistanceCheck(param.position, nb.body.transform.position, param.range)) {
-                Publish(nb);
+            if (!KM.DistanceCheck(param.position, nb.body.transform.position, param.range)) {
+                continue;
             }
+            if (blastInGround) {
+                ApplyBoomLocal(nb.body, param);
+            }
+            Publish(nb);
         }
     }
 
@@ -411,9 +433,14 @@ internal static partial class TrapClaim {
     }
 
     static readonly HashSet<int> chilledPuffs = new();
+    static int _chilledPruneAt = StaleIds.FirstThreshold;
 
     internal static void ChillBodies(ColdPuffScript puff, Vector2 puffPos, float coolRadius) {
-        if (puff == null || !chilledPuffs.Add(puff.GetInstanceID())) {
+        if (puff == null) {
+            return;
+        }
+        StaleIds.Prune<ColdPuffScript>(chilledPuffs, ref _chilledPruneAt);
+        if (!chilledPuffs.Add(puff.GetInstanceID())) {
             return;
         }
         bool any = false;
@@ -524,6 +551,10 @@ internal static partial class TrapClaim {
         if (Net.IsServer && enemy != null && NetObjectRegistry.TryGetSyncInfo(enemy, out var si)) {
             manifestVictim = victim.id;
             manifestUntil = Time.unscaledTime + 2f;
+            if (victim.id != 0) {
+                ServerMain.Server_AnnounceSound(enemy.transform.position, "crystalenemylaugh", ServerMain.AllClientIdsExceptHost);
+            }
+            // 冲刺落地包到达前怪物已嵌进墙体，客机直接按房主点名的受击者结算并回传受击肢体位掩码
             var writer = Net.CreateWriter(NetmsgId.CLIENT_TrapState);
             writer.Put(KindManifest);
             writer.Put(si.syncId);
@@ -554,18 +585,33 @@ internal static partial class TrapClaim {
             manifestClaimed.Clear();
         }
 
-        ApplyManifestLunge(enemy, body);
+        Limb pick = ApplyManifestLunge(enemy, body);
         Ignore(body);
         if (Net.IsClient) {
-            Send(KindManifest, si.syncId, 0);
+            Send(KindManifest, si.syncId, pick != null ? Bit(pick) : (ushort)0);
         } else if (body.TryGetNetBody(out var nb)) {
             Publish(nb);
         }
     }
 
-    static void ApplyManifestLunge(CrystalEnemy enemy, Body body) {
-        if (enemy == null || body == null || body.limbs == null || body.limbs.Length == 0) {
-            return;
+    static Limb ApplyManifestLunge(CrystalEnemy enemy, Body body) {
+        Limb pick = PickManifestLimb(body);
+        HitManifestLimb(pick);
+        if (Net.IsServer && enemy != null) {
+            BuildingEntity build = enemy.GetComponent<BuildingEntity>();
+            if (build != null) {
+                build.SetHealth(build.GetHealth() - 100f);
+            }
+        }
+        if (enemy != null && (!Net.IsRunning || Net.IsServer)) {
+            Sound.Play("crystalenemylaugh", enemy.transform.position, twoDimensional: false, pitchShift: false);
+        }
+        return pick;
+    }
+
+    static Limb PickManifestLimb(Body body) {
+        if (body == null || body.limbs == null) {
+            return null;
         }
         List<Limb> live = new();
         for (int i = 0; i < body.limbs.Length; i++) {
@@ -575,31 +621,31 @@ internal static partial class TrapClaim {
             }
         }
         if (live.Count == 0) {
+            return null;
+        }
+        return live[Random.Range(0, live.Count)];
+    }
+
+    static void HitManifestLimb(Limb pick) {
+        if (pick == null || pick.body == null) {
             return;
         }
-        Limb pick = live[Random.Range(0, live.Count)];
         float armor = pick.GetArmorReduction();
         pick.DamageWearables(0.4f);
         pick.muscleHealth -= 35f / armor;
         pick.skinHealth -= 50f / armor;
         pick.pain += 35f / armor;
         pick.bleedAmount += 15f / armor;
+        Body body = pick.body;
         body.adrenaline += 70f;
         body.stamina = 100f;
         body.eyePanicTime = 0.5f;
         body.Scream();
         body.Ragdoll();
         body.DoGoreSound();
-        if (Net.IsServer) {
-            BuildingEntity build = enemy.GetComponent<BuildingEntity>();
-            if (build != null) {
-                build.SetHealth(build.GetHealth() - 100f);
-            }
-        }
-        Sound.Play("crystalenemylaugh", enemy.transform.position, twoDimensional: false, pitchShift: false);
     }
 
-    static bool AcceptManifest(knetid id, NetBody nb) {
+    static bool AcceptManifest(knetid id, NetBody nb, ushort mask) {
         if (!NetObjectRegistry.TryGetSyncInfo(id, out var si) || si.go == null || !si.go.TryGetComponent(out CrystalEnemy enemy)) {
             return false;
         }
@@ -610,6 +656,14 @@ internal static partial class TrapClaim {
         if (!TakeWindow(KindManifest, id, nb.netId, false, ManifestWindow)) {
             return false;
         }
+        // 将客机上报的受击肢体伤势同步施加到房主替身后再广播血量，防止房主满血替身覆盖抹掉客机流血状态
+        if (mask == 0) {
+            Limb pick = PickManifestLimb(nb.body);
+            if (pick != null) {
+                mask = Bit(pick);
+            }
+        }
+        Each(nb.body, mask, HitManifestLimb);
         BuildingEntity build = enemy.GetComponent<BuildingEntity>();
         if (build != null && build.GetHealth() > 0.5f) {
             build.SetHealth(build.GetHealth() - 100f);

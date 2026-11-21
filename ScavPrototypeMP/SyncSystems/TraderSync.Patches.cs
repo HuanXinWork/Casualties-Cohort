@@ -68,7 +68,6 @@ static class TraderScript_Swing_MultiplayerPatch {
             return true;
         }
         TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
-        tt.bgo.SetNearestBody();
         Body focused = tt.focused_body;
         if (focused != null && focused.TryGetNetBody(out NetBody nb) && nb.IsPlayer && !Util.IsBodyLocal(focused)) {
             return false;
@@ -318,8 +317,10 @@ static class TraderScript_get_body_MultiplayerPatch {
                 return;
             }
         }
-        bgo.SetNearestBody();
-        if (bgo.body == null && PlayerCamera.main != null) {
+        Body near = TrackerTrader.ClosestLiving(__instance.transform.position);
+        if (near != null) {
+            bgo.body = near;
+        } else if (PlayerCamera.main != null) {
             bgo.body = PlayerCamera.main.body;
         }
         __result = bgo.body;
@@ -525,6 +526,8 @@ public static class TraderScript_MeetPlayer_MultiplayerPatch {
             __instance.startedConvo = true;
             __instance.eyes.sprite = __instance.eyeSprites[1];
             Traverse.Create(__instance).Field("sitTime").SetValue(Time.time);
+            // 补齐原版 MeetPlayer 的起身目标值，避免客户端跳过原方法后商人始终坐着不动
+            __instance.standTarget = Random.Range(0.9f, 1f);
             TraderCommit.Ask(__instance.GetOrAddComponent<TrackerTrader>());
             return false;
         }
@@ -546,5 +549,42 @@ public static class TraderScript_MeetPlayer_MultiplayerPatch {
 internal static class TraderScript_DoRest_MultiplayerPatch {
     private static bool Prefix(TraderScript __instance) {
         return TraderCommit.LetStock(__instance, TraderCommit.Op.Rest);
+    }
+}
+
+// 客户端平滑展示敌意进度条，但上限严格受控于服务端最新快照值
+static class TraderWindup {
+    static readonly Dictionary<int, float> Shown = new();
+    static readonly Dictionary<int, float> Target = new();
+
+    internal static void Note(TraderScript trader, float incoming) {
+        if (trader == null)
+            return;
+        if (Net.IsClient) {
+            int id = trader.GetInstanceID();
+            Target[id] = incoming;
+            Shown[id] = incoming;
+        }
+        trader.hostility = incoming;
+    }
+
+    internal static void Before(TraderScript trader) {
+        if (!Net.IsClient || trader == null)
+            return;
+        if (Shown.TryGetValue(trader.GetInstanceID(), out float shown)) {
+            trader.hostility = shown;
+        }
+    }
+
+    internal static void After(TraderScript trader) {
+        if (!Net.IsClient || trader == null)
+            return;
+        int id = trader.GetInstanceID();
+        float shown = trader.hostility;
+        if (Target.TryGetValue(id, out float cap) && shown > cap) {
+            shown = cap;
+        }
+        Shown[id] = shown;
+        trader.hostility = shown;
     }
 }

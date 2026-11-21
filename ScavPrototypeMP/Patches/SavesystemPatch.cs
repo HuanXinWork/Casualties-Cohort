@@ -246,6 +246,12 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
             return false;
         }
 
+        // 房主迁移可选中从未参与过本局的新房主；根存档仅提供世界元数据而非他人身体，由 Postfix 按各玩家子目录恢复既有角色
+        if (!force && TransferTransport.SkipTransferredRootBody()) {
+            log.l("Host transfer: new host has no saved character; keeping their fresh character.");
+            return false;
+        }
+
         if (!force) {
             Body originalLocalBody = Util.GetLocalBody();
             SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
@@ -292,7 +298,7 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
             try {
                 string mpsavedir = SavesystemPatch.mpsavefolder;
                 if (Multiplayer.IsNetworkActiveAndIsServer() && SaveSystem.loadedRun && Directory.Exists(mpsavedir)) {
-                    Multiplayer.DoMultiplayerStatusMessageLog("Attempting to load a multiplayer save.");
+                    Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("savesystem_loading_mp_save"));
                     if (SavesystemPatch.TryPeekMpWorldState(out var peek) && WorldGeneration.world != null) {
                         SavesystemPatch.ApplyPeekedWorldState(WorldGeneration.world, peek);
                         ModLog.Info($"Applied mp_save world peek: depth={peek.biomeDepth} midlevel={peek.midlevel} traveled={peek.totalTraveled}", LogDomain.World);
@@ -336,6 +342,9 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
 
                             if (jObject.TryGetValue("RULES", out var rulesToken)) {
                                 Multiplayer.rules = rulesToken.ToObject<MultiplayerGameRules>();
+                                if (SavesystemPatch.DebugWorldUsesSave) {
+                                    Multiplayer.rules.DebugWorldSaveSystem = true;
+                                }
                             }
 #if FULLGAME
                             if (jObject.TryGetValue(AchievementBreakSync.SaveHeaderKey, out var cheatedToken)

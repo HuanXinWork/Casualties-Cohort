@@ -59,9 +59,9 @@ namespace Together {
             steamtestlog("[" + GameLobbyJoinRequested_t.k_iCallback + " - GameLobbyJoinRequested] - " + pCallback.m_steamIDLobby + " -- " + pCallback.m_steamIDFriend);
 
             if (Multiplayer.IsNetworkActiveOrIsInGame()) {
-                Multiplayer.DoMultiplayerStatusMessageLog("GameLobbyJoinRequested: Nah, Already in a game.");
+                Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_joinrequest_in_game"));
             } else {
-                Multiplayer.DoMultiplayerStatusMessageLog($"GameLobbyJoinRequested: lobbyID:{pCallback.m_steamIDLobby}");
+                Multiplayer.DoMultiplayerStatusMessageLog(string.Format(Lang.Get("steam_joinrequest"), pCallback.m_steamIDLobby));
                 TransportSteamworks.OnWantToJoinLobby(pCallback.m_steamIDLobby.m_SteamID);
             }
         }

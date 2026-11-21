@@ -22,7 +22,11 @@ public static class Body_Attack_MultiplayerPatch {
     public static bool breakTheAttackLoop = false;
     public static bool StaticHitValidation = false;
     public static bool ForceOnlyStaminaUse = false;
+    // 服务端重演客户端已确认命中的挥击时置位，确保重演返回 true 以正常扣除工具耐久
+    public static bool ForceHitResult = false;
     public static bool ForceOnlyRetrieveAttackInfo = false;
+
+    public static void Forget(knetid client) => MeleeCombatSync.Forget(client);
 
     public static Body LastAttacker {
         get => MeleeCombatSync.LastAttacker;
@@ -38,6 +42,7 @@ public static class Body_Attack_MultiplayerPatch {
         public Vector2 limb1Pos;
         public AttackInfo atk;
         public float atkPower;
+        public bool forceHitResult;
     }
 
     private static int LabelTargetIndex(List<CodeInstruction> codes, Label label) {
@@ -177,7 +182,9 @@ public static class Body_Attack_MultiplayerPatch {
             limb1Pos = __instance.limbs[(int)LimbIndex.UpperTorso].transform.position,
             atk = atk,
             atkPower = MeleeCombatSync.CalculateAttackPower(__instance, MeleeCombatSync.LastAttackInfo),
+            forceHitResult = ForceHitResult,
         };
+        ForceHitResult = false;
 
         if (ForceOnlyRetrieveAttackInfo) {
             ForceOnlyRetrieveAttackInfo = false;
@@ -192,7 +199,8 @@ public static class Body_Attack_MultiplayerPatch {
             ForceOnlyStaminaUse = false;
         }
 
-        if (__instance.conscious && __instance.attackCooldown <= 0f) {
+        // Headpat 抚摸点击并非挥击，禁止标记为攻击广播以防工具被重复触发
+        if (!(Net.IsRunning && HeadpatSession.Blocks(__instance)) && __instance.conscious && __instance.attackCooldown <= 0f) {
             __state.canDoAttack = true;
         }
         if (__state.canDoAttack && __instance.TryGetNetBody(out NetBody nb)) {
@@ -203,7 +211,16 @@ public static class Body_Attack_MultiplayerPatch {
     }
 
     private static void Postfix(Body __instance, ref bool __result, ref AttackSwingState __state) {
+        if (__state != null && Net.IsRunning && HeadpatSession.Blocks(__instance)) {
+            __state.canDoAttack = false;
+        }
         MeleeCombatSync.LastAttackResult = __result;
+
+        // 本模组接管结算的本地命中，或服务端确认有效的重演挥击，均视为有效命中以正常扣除工具耐久
+        if ((breakTheAttackLoop && Util.IsBodyLocal(__instance)) || (__state != null && __state.forceHitResult)) {
+            __result = true;
+        }
+
         StaticHitValidation = false;
         breakTheAttackLoop = false;
         // Issue #62: 当手持近战工具开启 Headpat 抚摸并左键点击时，HeadpatSession.BlockAttack.Prefix 返回 false 短路 Body.Attack，

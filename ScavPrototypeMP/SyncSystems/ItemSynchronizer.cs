@@ -507,7 +507,8 @@ internal partial class ItemSync : CasualtiesTogetherSingleton {
     }
 
     internal static void SpentDestroy(Item item) {
-        if (!Net.IsServer || item == null || item.condition > 0f)
+        // 断线复位后 Net.Type 可能重置为 Host 但会话已停，必须先检查 Net.IsRunning 防止单机/退房残余世界误跑服务端销毁
+        if (!Net.IsRunning || !Net.IsServer || item == null || item.condition > 0f)
             return;
         if (item.Stats == null || !item.Stats.destroyAtZeroCondition)
             return;
@@ -515,17 +516,25 @@ internal partial class ItemSync : CasualtiesTogetherSingleton {
             return;
 
         if (item.TryGetComponent(out Container box)) {
-            ParentTestChest("chest spill host", item, item.gameObject);
-            box.ContainerBroke();
-            if (NetObjectRegistry.TryGetSyncInfo(item.gameObject, out SyncInfo bag) && bag != null && !bag.IsDestroyed) {
-                ReleaseNamedContents(bag);
-                bag.Destroy();
-            } else {
-                UnityEngine.Object.Destroy(item.gameObject, 0.05f);
+            try {
+                ParentTestChest("chest spill host", item, item.gameObject);
+                box.ContainerBroke();
+                if (NetObjectRegistry.TryGetSyncInfo(item.gameObject, out SyncInfo bag) && bag != null && !bag.IsDestroyed) {
+                    ReleaseNamedContents(bag);
+                    bag.Destroy();
+                } else {
+                    UnityEngine.Object.Destroy(item.gameObject, 0.05f);
+                }
+            } catch (Exception ex) {
+                log.error("[join] spent bag " + item.id + " " + ex.Message);
             }
             return;
         }
-        UnityEngine.Object.Destroy(item.gameObject);
+        try {
+            UnityEngine.Object.Destroy(item.gameObject);
+        } catch (Exception ex) {
+            log.error("[join] spent item " + item.id + " " + ex.Message);
+        }
     }
 
     internal static void ReleaseNamedContents(SyncInfo bag) {

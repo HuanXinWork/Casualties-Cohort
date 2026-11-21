@@ -77,7 +77,7 @@ public partial class ServerMain {
                         if (prs) {
 #if FULLGAME
                             // autostart only proceeds once everyone is Ready (CharacterSelectWait).
-                            if (!CharacterSelectWait.Waiting) {
+                            if (!LobbyHostTransfer.HasRequest && !LobbyHostTransfer.Busy && !LobbyHostTransfer.AwaitingTransferredLoad && !LobbyHostTransfer.HoldLobbyAutoStart && !CharacterSelectWait.Waiting) {
                                 Multiplayer.DoMultiplayerStatusMessageLog(Lang.GetEN("autostarting_run"));
                                 Chat.Server_ChatAnnouncement("<key:autostarting_run>");
                                 Chat.Server_ChatAnnouncement("Ready up to start...");
@@ -85,7 +85,7 @@ public partial class ServerMain {
                             }
 #else
                             var msg = "autostarting_run";
-                            Multiplayer.DoMultiplayerStatusMessageLog(Lang.GetEN(msg));
+                            Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get(msg));
                             Chat.Server_ChatAnnouncement("<key:autostarting_run>");
                             prs.StartCoroutine(prs.WaitLoad());
 #endif
@@ -168,18 +168,18 @@ public partial class ServerMain {
                         if (Multiplayer.rules.AutoExitWhenAllLeft && ScavPlayer.ClientIdToPlayerDict.Count == 0) {
                             _ded_server_switch_counter = -30;
 
-                            var msg = $"Auto-exiting to main menu because everyone left the server.";
+                            var msg = Lang.Get("auto_exit_all_left");
                             Multiplayer.DoMultiplayerStatusMessageLog(msg);
-                            Chat.Server_ChatAnnouncement(msg);
+                            Chat.Server_ChatAnnouncement("<key:auto_exit_all_left>");
 
                             PlayerCamera.main.ToMainMenu();
                             return;
                         } else if (Multiplayer.rules.AutoExitWhenAllDied && ScavPlayer.AllLivingPlayers.Count == 0 && !ModHooks.QueryBlockAutoExitOnAllDead()) {
                             _ded_server_switch_counter = -5;
 
-                            var msg = $"Auto-exiting to main menu because everyone died.";
+                            var msg = Lang.Get("auto_exit_all_died");
                             Multiplayer.DoMultiplayerStatusMessageLog(msg);
-                            Chat.Server_ChatAnnouncement(msg);
+                            Chat.Server_ChatAnnouncement("<key:auto_exit_all_died>");
 
                             PlayerCamera.main.ToMainMenu();
                             return;
@@ -462,16 +462,34 @@ public partial class ServerMain {
                 _lastSentRunSettings = curRunSettings;
                 _lastSentRules = curRules;
 
-                var writer = Net.CreateWriter(NetmsgId.CLIENT_RunSettings);
-                writer.Put(curRunSettings, true);
-                writer.Put(Multiplayer.rules);
-                writer.CompressWriter();
-                Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, ServerMain.AllClientIdsExceptHost);
+                SendRulesTo(ServerMain.AllClientIdsExceptHost, curRunSettings, curRules);
             }
         }
     }
     internal static string _lastSentRunSettings = "";
     internal static string _lastSentRules = "";
+
+    // 世界生成 Apply() 会覆盖回开局快照中的规则，需支持向指定客机主动重发实时规则以防丢失客户端作弊权限等变更
+    internal static void SendRulesTo(IReadOnlyList<knetid> who) {
+        if (who == null || who.Count == 0) {
+            return;
+        }
+        string curRunSettings = WorldMP.CompileRunSettings();
+        string curRules = JsonConvert.SerializeObject(Multiplayer.rules, Formatting.None);
+        SendRulesTo(who, curRunSettings, curRules);
+    }
+
+    static void SendRulesTo(IReadOnlyList<knetid> who, string curRunSettings, string curRules) {
+        _lastSentRunSettings = curRunSettings;
+        _lastSentRules = curRules;
+
+        var writer = Net.CreateWriter(NetmsgId.CLIENT_RunSettings);
+        writer.Put(curRunSettings, true);
+        writer.Put(Multiplayer.rules);
+        writer.CompressWriter();
+        Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, who);
+        log.l("[rules] send sv_cheats=" + Multiplayer.rules.sv_cheats + " clientcheats=" + Multiplayer.rules.AllowClientCheatCommands + " to=" + who.Count);
+    }
 
     private void RareUpdateSyncClients() {
         if (!Util.IsWorldGenerated()) return;
@@ -516,7 +534,7 @@ public partial class ServerMain {
                 }
 
                 if (ServerMain.CheckIfEnoughPeopleAreAtLayerFinish(out int _, out int _)) {
-                    world.savePanel.SetActive(value: true);
+                    // 出口面板由每帧钩子统一接管显隐，此处不再直接 SetActive(true) 以免与原版按房主自身高度关闭的逻辑竞争闪烁
                     can_autocontinue = true;
                 } else if (CheckIfShouldStartRadlineForStragglers()) {
                     if (Util.IsWorldGenerated() && !RadiationLine.line.active) {
@@ -536,7 +554,7 @@ public partial class ServerMain {
                     }
                 }
 
-                if (can_autocontinue && Multiplayer.rules.AutoContinue) {
+                if (can_autocontinue && Multiplayer.rules.AutoContinue && !LobbyHostTransfer.PauseAutoContinue) {
                     if (!WorldGeneration.world.doingRegen && !world.generatingWorld && world.worldExists) {
                         world.generatingWorld = true;
 

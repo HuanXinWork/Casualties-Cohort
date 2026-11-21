@@ -19,6 +19,7 @@ internal static partial class FixInvSync {
                 _wasInGame = false;
                 _sweepQuiet = false;
                 Pending.Clear();
+                PendingUpdates.Clear();
                 Exhausted.Clear();
             }
             return;
@@ -38,6 +39,7 @@ internal static partial class FixInvSync {
             return;
 
         Done.Clear();
+        PendingUpdates.Clear();
         float now = Time.realtimeSinceStartup;
         _ticking = true;
         try {
@@ -49,8 +51,13 @@ internal static partial class FixInvSync {
                     Done.Add(key);
                     continue;
                 }
-                if (info.go == null)
-                    info.CreateObject();
+                if (info.go == null) {
+                    try {
+                        info.CreateObject();
+                    } catch (Exception ex) {
+                        OptimizerMain.Log?.LogError("[join] create failed " + ex.Message);
+                    }
+                }
                 if (info.go == null)
                     continue;
                 if (info.item == null) {
@@ -69,7 +76,8 @@ internal static partial class FixInvSync {
                 }
                 if (!wait.Fp.Matches(data, net, ver)) {
                     wait = NewWait(info, data, net, ver);
-                    Pending[key] = wait;
+                    // Unity Mono BCL 下在 foreach 期间向 Dictionary 覆盖已有键同样会递增 _version 触发 InvalidOperationException，统一暂存至循环后写回
+                    PendingUpdates.Add(new KeyValuePair<int, Wait>(key, wait));
                 }
 
                 bool missing = TargetMissing(info);
@@ -100,8 +108,16 @@ internal static partial class FixInvSync {
             _ticking = false;
         }
 
+        for (int i = 0; i < PendingUpdates.Count; i++) {
+            KeyValuePair<int, Wait> upd = PendingUpdates[i];
+            if (Pending.ContainsKey(upd.Key)) {
+                Pending[upd.Key] = upd.Value;
+            }
+        }
+        PendingUpdates.Clear();
         for (int i = 0; i < Done.Count; i++)
             Pending.Remove(Done[i]);
+        Done.Clear();
     }
 
     static void Sweep() {
@@ -123,8 +139,13 @@ internal static partial class FixInvSync {
             SyncInfo info = Batch[i];
             if (ContainerEncoding.IsLooseInWorld(info.container_data1.Value))
                 continue;
-            if (info.go == null)
-                info.CreateObject();
+            if (info.go == null) {
+                try {
+                    info.CreateObject();
+                } catch (Exception ex) {
+                    OptimizerMain.Log?.LogError("[join] create failed " + ex.Message);
+                }
+            }
             if (info.go == null || info.item == null || Placed(info))
                 continue;
             if (Enqueue(info))
@@ -252,7 +273,14 @@ internal static partial class FixInvSync {
         if (ContainerEncoding.IsAttachedToBody(data)) {
             if (!ContainerLink.TryBody(info, out _))
                 return false;
-            _apply(info);
+            if (info.go == null || info.item == null)
+                return false;
+            try {
+                _apply(info);
+            } catch (Exception ex) {
+                OptimizerMain.Log?.LogError("[join] parent slot failed " + info.item.id + " net=" + net + " " + ex.Message);
+                return false;
+            }
             return Placed(info);
         }
 
@@ -263,8 +291,15 @@ internal static partial class FixInvSync {
             ItemSync.ParentTestChest("chest skip retry", info.item, bag.go);
             return false;
         }
+        if (info.item == null || box == null)
+            return false;
 
-        ItemSync.Container_ForceLoadItem(info.item, box);
+        try {
+            ItemSync.Container_ForceLoadItem(info.item, box);
+        } catch (Exception ex) {
+            OptimizerMain.Log?.LogError("[join] parent bag failed " + info.item.id + " net=" + net + " " + ex.Message);
+            return false;
+        }
         return Placed(info);
     }
 

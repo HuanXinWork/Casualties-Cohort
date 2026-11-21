@@ -197,6 +197,11 @@ public partial class ServerMain : MonoBehaviour {
 
     internal static bool SpawnPlacementBusy(knetid clientId) => _spawnBusy.Contains(clientId);
 
+    // 出生点协程挂载在玩家侧，若玩家提前离房无法走到末尾 Remove，需在离房清理时主动释放
+    internal static void ForgetSpawnBusy(knetid clientId) {
+        _spawnBusy.Remove(clientId);
+    }
+
     public static IEnumerator GiveSpawnLocationToPlayer(knetid clientId) {
         if (!_spawnBusy.Add(clientId)) {
             yield break;
@@ -288,11 +293,7 @@ public partial class ServerMain : MonoBehaviour {
             required = 1000;
             return false;
         }
-#if FULLGAME
-        return CheckIfCanFinishLayerCustomCondition((ScavPlayer plr) => FullgameWorldCompat.IsAtLayerExit(plr.body), out current, out required);
-#else
-        return CheckIfCanFinishLayerCustomCondition((ScavPlayer plr) => { return (plr.pos.y < (float)(0L - (long)WorldGeneration.world.halfHeight) + 3.1f); }, out current, out required);
-#endif
+        return CheckIfCanFinishLayerCustomCondition((ScavPlayer plr) => plr.IsAtTheEndOfLayer(), out current, out required);
     }
 
     public static bool CheckIfShouldStartRadlineForStragglers(byte minimum = 1) {
@@ -454,17 +455,30 @@ public partial class ServerMain : MonoBehaviour {
     }
 
     public static bool DidHeFinishTheLayer(Body body) {
+        bool raw;
+        bool left;
 #if FULLGAME
-        return FullgameWorldCompat.IsAtLayerExit(body);
+        raw = FullgameWorldCompat.IsAtLayerExit(body);
+        left = FullgameWorldCompat.HasLeftLayerExit(body);
 #else
-        if (body == null || WorldGeneration.world == null) {
-            return false;
-        }
-        if ((body.transform.position.y < (float)(0L - (long)WorldGeneration.world.halfHeight) + 3.1f)) {
-            return true;
-        }
-        return false;
+        raw = body != null && WorldGeneration.world != null
+            && body.transform.position.y < (float)(0L - (long)WorldGeneration.world.halfHeight) + 3.1f;
+        left = body == null || WorldGeneration.world == null
+            || body.transform.position.y >= (float)(0L - (long)WorldGeneration.world.halfHeight) + 3.1f + 8f;
 #endif
+        ScavPlayer plr = null;
+        if (body != null && body.TryGetNetBody(out NetBody nb) && nb != null) {
+            plr = nb.plr;
+        }
+        if (plr == null) {
+            return raw;
+        }
+        if (raw) {
+            plr.layerExitLatched = true;
+        } else if (left) {
+            plr.layerExitLatched = false;
+        }
+        return plr.layerExitLatched;
     }
 
     public static bool HostBodyIsDead() {
@@ -506,6 +520,7 @@ public partial class ServerMain : MonoBehaviour {
         foreach (var item in ScavPlayer.AllPlayers) {
             item._tutorial_finished = false;
             item.finishedLayer = false;
+            item.layerExitLatched = false;
         }
     }
 }

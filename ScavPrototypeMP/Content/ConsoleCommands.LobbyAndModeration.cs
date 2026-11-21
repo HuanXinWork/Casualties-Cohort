@@ -35,8 +35,8 @@ public partial class Con {
             float timeout = con.ParseFloat(splited[argcount++]);
             float percent = Mathf.Clamp(con.ParseFloat(splited[argcount++]), -100f, 100f) / 100f;
 
-            string title = "vote title";
-            string text = "vote text";
+            string title = Lang.MarkMsgAsLocaleKey("vote_default_title");
+            string text = Lang.MarkMsgAsLocaleKey("vote_default_text");
             string tt = splited.ElementAtOrDefault(argcount++);
             string te = splited.ElementAtOrDefault(argcount++);
             if (tt != null) {
@@ -68,7 +68,9 @@ public partial class Con {
             ConFailIfNetworkNotRunning();
             con.CheckArgumentCount(splited, 1);
 
-            string reason = splited.Length > 2 ? ("Kicked: " + string.Join(" ", splited.Skip(2))) : "Kicked!";
+            string reason = splited.Length > 2
+                ? Lang.FormatMsg("kick_reason_custom", string.Join(" ", splited.Skip(2)))
+                : Lang.MarkMsgAsLocaleKey("kick_reason_default");
             string plrname = splited[1];
             var res = PerformActionOnPlayersByName(plrname, (ScavPlayer plr) => {
                 if (!plr.IsLocal) {
@@ -81,7 +83,7 @@ public partial class Con {
             }, false, GetCommandCallerPlayer(), false, false);
 
             if (res.Item1) {
-                log.l($"Kicked: {plrname} - {reason}");
+                log.l($"Kicked: {plrname} - {Lang.ParseTaggedString(reason)}");
             } else {
                 log.l($"Failed to kick: {plrname} {res.Item2}");
             }
@@ -91,7 +93,9 @@ public partial class Con {
             ConFailIfNetworkIsRunningAndIsClient();
             con.CheckArgumentCount(splited, 1);
             string plrname = splited[1];
-            string reason = splited.Length > 2 ? ("Banned: " + string.Join(" ", splited.Skip(2))) : "Banned!";
+            string reason = splited.Length > 2
+                ? Lang.FormatMsg("ban_reason_custom", string.Join(" ", splited.Skip(2)))
+                : Lang.MarkMsgAsLocaleKey("ban_reason_default");
 
             var res = PerformActionOnPlayersByName(plrname, (ScavPlayer plr) => {
                 if (!plr.IsLocal) {
@@ -105,7 +109,7 @@ public partial class Con {
             }, false, GetCommandCallerPlayer(), false, false);
 
             if (res.Item1) {
-                log.l($"Banned: {plrname} - {reason}");
+                log.l($"Banned: {plrname} - {Lang.ParseTaggedString(reason)}");
             } else if (ulong.TryParse(plrname, out ulong parsed_as_steamid) && parsed_as_steamid != 0 && plrname.StartsWith("7656119")) {
                 BanList.Add("NULL", "", parsed_as_steamid);
                 log.l($"Banned Steam ID: {parsed_as_steamid} ");
@@ -123,7 +127,9 @@ public partial class Con {
                 throw new Exception("Only available for direct IP connection mode.");
             }
 
-            string reason = splited.Length > 2 ? ("Banned: " + string.Join(" ", splited.Skip(2))) : "Banned!";
+            string reason = splited.Length > 2
+                ? Lang.FormatMsg("ban_reason_custom", string.Join(" ", splited.Skip(2)))
+                : Lang.MarkMsgAsLocaleKey("ban_reason_default");
             var res = PerformActionOnPlayersByName(plrname, (ScavPlayer plr) => {
                 if (!plr.IsLocal) {
                     NetPeer peer = lnl.ClientIdToPeerDict[plr.playerId];
@@ -140,7 +146,7 @@ public partial class Con {
             }, false, GetCommandCallerPlayer(), false, false);
 
             if (res.Item1) {
-                log.l($"Banned: {plrname} - {reason}");
+                log.l($"Banned: {plrname} - {Lang.ParseTaggedString(reason)}");
             } else if (Net.TryParseIPPORT(plrname, out string realip, out _)) {
                 BanList.Add(realip, "", 0);
                 log.l($"Banned IP: {realip} ");
@@ -452,7 +458,7 @@ public partial class Con {
             ELobbyType type = KSteam.NumToLobbyType(lobbytype);
             Net.NetType netType = Multiplayer.SERVER_TOGGLE_SHOULD_HOST_DEDICATED ? Net.NetType.DedicatedServer : Net.NetType.Host;
 
-            Multiplayer.DoMultiplayerStatusMessageLog($"Hosting Steam Lobby: {netType}, {type}");
+            Multiplayer.DoMultiplayerStatusMessageLog(string.Format(Lang.Get("mmct_hosting_steam_lobby"), netType, type));
             TransportSteamworks.OnWantToHostLobby(netType, type);
         }, null, ("int", "Lobby type (2 = public, 1 = friends only, 0 = private)"), ("bool", "dedicated")));
 

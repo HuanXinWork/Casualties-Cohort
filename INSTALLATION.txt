@@ -1,49 +1,66 @@
-"Casualties: Together" Co-Op Mod
-Official link: https://github.com/creaturefeaturelarry/casualties-together
-Support the developer: https://buymeacoffee.com/casualtiestogether
+"Casualties: Cohort" Co-Op Mod (Fork of Casualties: Together)
+Repository:   https://github.com/HuanXinWork/Casualties-Cohort
+Upstream Mod: https://github.com/creaturefeaturelarry/casualties-together
 
 
-1. Download BepInEx from:   https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.5/BepInEx_win_x64_5.4.23.5.zip
+=== FULL INSTALLATION (CasualtiesCohort-v*.zip) ===
 
-2. Go to Game directory:
- - Open Steam
- - Right click on the game
- - Click: Manage > Browse Local Files
- - Now you opened the game root directory
+1. Download BepInEx 5.4.23.5 (x64):
+   https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.5/BepInEx_win_x64_5.4.23.5.zip
 
-3. Unzip BepInEx in the game root directory.
+2. Open the Casualties: Unknown game root directory:
+   - Open Steam Library
+   - Right-click "Casualties: Unknown"
+   - Click: Manage > Browse local files
 
-4. Unzip MP Mod (you've already done it)
+3. Extract BepInEx_win_x64_5.4.23.5.zip directly into the game root directory.
 
-5. Move the contents of "mod" folder into the game root directory.
+4. Extract CasualtiesCohort-v5.5.4.zip (or CasualtiesCohort-v5.5.4+debug.zip for diagnostic symbols/logs) directly into the game root directory, merging into BepInEx/.
+   (Note: Do NOT look for a "mod" subfolder or "autoupdater_patcher.dll" — the archive root already starts at BepInEx/plugins/Together/.)
 
-Now it should look like this:
-  CasualtiesUnknown/
-    - CasualtiesUnknown.exe
-    - UnityPlayer.dll
-    - UnityCrashHandler64.exe
-    - CasualtiesUnknown_Data/
-    - MonoBleedingEdge/
-    - winhttp.dll  <-  from BepInEx zip
-    - BepInEx/
-    - - plugins/
-    - - - Together/                    <-  from mod zip
-    - - - - CasualtiesMP.dll
-    - - - - LiteEntitySystem.dll
-    - - - - LiteNetLib.dll
-    - - - - OpusSharp.Core.dll
-    - - - - ... and so on ...
-    - - patchers/
-    - - - autoupdater_patcher.dll      <-  from mod zip
-    - - core/                    <-  from BepInEx zip
-    - - ... and so on...
+5. Verify your directory layout looks like this:
+   CasualtiesUnknown/
+     - CasualtiesUnknown.exe
+     - UnityPlayer.dll
+     - CasualtiesUnknown_Data/
+     - MonoBleedingEdge/
+     - winhttp.dll                                         <- from BepInEx zip
+     - doorstop_config.ini                                 <- from BepInEx zip
+     - BepInEx/
+     - - core/                                             <- from BepInEx zip
+     - - plugins/
+     - - - Together/                                       <- from CasualtiesCohort zip
+     - - - - CasualtiesMP.dll
+     - - - - K4os.Compression.LZ4.dll
+     - - - - LiteEntitySystem.dll
+     - - - - LiteNetLib.dll
+     - - - - OpusSharp.Core.dll
+     - - - - opus.dll
+     - - - - RefMagic.dll
+     - - - - System.Runtime.CompilerServices.Unsafe.dll
+     - - - - (CasualtiesMP.pdb in +debug builds)
 
-6. Launch the game through Steam.
+6. Launch the game from your Steam Library.
 
-7. MP button should appear at the bottom.
+7. Multiplayer buttons will appear at the bottom of the main menu.
+   (To return to singleplayer: Settings > General > Deactivate MP Mod)
 
 
-Didn't work? Found bugs? Wanna find friends? Join our discord:
- Casualties: Together Mod Discord:     https://discord.gg/7K6J6bhV8b
- Casualties: Unknown Official Discord: https://discord.gg/targetplanet
+=== SINGLE-DLL QUICK UPDATE (CasualtiesMP.dll / CasualtiesMP+debug.dll) ===
 
+If you already installed the full CasualtiesCohort zip and have the 7 dependency DLLs inside BepInEx/plugins/Together/:
+- Download CasualtiesMP.dll and replace BepInEx/plugins/Together/CasualtiesMP.dll.
+- If using CasualtiesMP+debug.dll for troubleshooting, rename it to CasualtiesMP.dll when placing it in BepInEx/plugins/Together/.
+
+
+=== LINUX / PROTON ===
+
+Add the following to Steam Launch Options so Proton loads BepInEx:
+WINEDLLOVERRIDES="winhttp=n,b" %command%
+
+
+=== COMMUNITY & SUPPORT ===
+
+Report Casualties: Cohort issues:    https://github.com/HuanXinWork/Casualties-Cohort/issues
+Casualties: Together Mod Discord:    https://discord.gg/7K6J6bhV8b
+Casualties: Unknown Official Server: https://discord.gg/targetplanet

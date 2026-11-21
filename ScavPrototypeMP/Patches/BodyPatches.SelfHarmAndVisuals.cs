@@ -371,10 +371,6 @@ static class Body_HandleBody_MpSleepSpeed {
             return;
         }
 
-        if (nb.piggybacking_on != null && __instance.sleeping) {
-            __instance.curSleep = Body.SleepQuality.Okay;
-        }
-
         float mult = 1f;
         if (ServerMain.TryGetLivingEnergyMedian(out float median)) {
             float offset = (__instance.energy - median) * 0.01f;
@@ -400,6 +396,19 @@ static class Body_HandleBody_MpSleepSpeed {
     static void Postfix(Body __instance, float __state) {
         if (__instance != null) {
             __instance.sleepCycleSpeed = __state;
+        }
+    }
+}
+
+// 原版倒地地面检测会按背负者脚下地板覆写 curSleep，需在 HandleGroundedState 之后将被背负状态重标为 Okay 睡眠质量。
+[HarmonyPatch(typeof(Body), "HandleGroundedState")]
+static class Body_HandleGroundedState_PiggySleep {
+    static void Postfix(Body __instance) {
+        if (!Net.IsRunning || __instance == null || !__instance.alive) {
+            return;
+        }
+        if (__instance.TryGetNetBody(out NetBody nb) && nb.piggybacking_on != null) {
+            __instance.curSleep = Body.SleepQuality.Okay;
         }
     }
 }

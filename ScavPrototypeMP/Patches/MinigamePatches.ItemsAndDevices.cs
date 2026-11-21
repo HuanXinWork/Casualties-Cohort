@@ -130,6 +130,7 @@ public static class BandageMinigame_DoBandageAction_MultiplayerPatch {
                     Util.GetLimbIndex(l),
                     true);
                 si.SetIgnoreTimeForRoundTrip();
+                si.AwaitServerAck();
             }
         }
         return true;
@@ -361,6 +362,66 @@ internal static class KeypadMinigame_CheckForMegalovania_MultiplayerPatch {
     }
 }
 
+// 闭合背包内子物体处于非激活态（activeInHierarchy=false），原版检索会漏掉其中的撬锁工具导致远端撬锁难度异常拉满；
+// 此处显式用 GetComponentsInChildren<Item>(true) 穿透闭合容器检索 lockpickingkit。
+[HarmonyPatch(typeof(LockpingMinigame), nameof(LockpingMinigame.Start))]
+public static class LockpingMinigame_Start_MultiplayerPatch {
+    static void Postfix(LockpingMinigame __instance) {
+        if (!Net.IsRunning || __instance == null)
+            return;
+        ApplyKit(__instance);
+    }
+
+    internal static void ApplyKit(LockpingMinigame game) {
+        if (game == null || Minigame.game == null)
+            return;
+        Body body = Minigame.game.body;
+        if (body == null || body.skills == null || body.skills.INT < 10)
+            return;
+        Item kit = FindKit(body);
+        if (kit == null)
+            return;
+        int level = body.skills.INT - 10;
+        if (game.pickLevel < level)
+            game.pickLevel = level;
+        if (Minigame.game.currentItem == null)
+            Minigame.game.currentItem = kit;
+    }
+
+    internal static Item FindKit(Body body) {
+        if (body == null)
+            return null;
+        if (body.slots != null) {
+            for (int i = 0; i < body.slots.Length; i++) {
+                Item found = Scan(body.GetItem(i));
+                if (found != null)
+                    return found;
+            }
+        }
+        foreach (Item worn in body.GetAllWearables()) {
+            Item found = Scan(worn);
+            if (found != null)
+                return found;
+        }
+        return null;
+    }
+
+    static Item Scan(Item item) {
+        if (item == null)
+            return null;
+        if (item.id == "lockpickingkit")
+            return item;
+        if (!item.TryGetComponent(out Container _))
+            return null;
+        Item[] kids = item.GetComponentsInChildren<Item>(true);
+        for (int i = 0; i < kids.Length; i++) {
+            if (kids[i] != null && kids[i].id == "lockpickingkit")
+                return kids[i];
+        }
+        return null;
+    }
+}
+
 /// <summary>
 /// 撬锁卡死断爪/扣耐久事件上报补丁。
 /// </summary>
@@ -372,6 +433,8 @@ public static class LockpingMinigame_Update_MultiplayerPatch {
         if (!Net.IsRunning) {
             return;
         }
+        if (__instance.pickLevel < 0)
+            LockpingMinigame_Start_MultiplayerPatch.ApplyKit(__instance);
 
         if (__instance.clickingInside
             && __instance.lockProgress >= __instance.MaxTurnProgress()
@@ -491,38 +554,39 @@ internal static class ItemsAndDevicesMinigameReceivers {
         reader.Get(out knetid bandageId);
         reader.Get(out knetid targetPlr);
         reader.Get(out byte limbId);
-
-        if (MedicalSync.Server_CheckCanHealerUseItemForLimb(clientId, targetPlr, limbId, bandageId, out ScavPlayer healerPlr, out NetBody targetNb, out SyncInfo itemSi)) {
-            Limb limb = targetNb.body.limbs[limbId];
-            if (MinigameBase_StartMinigame_MultiplayerPatch.known_bandage_instance_lambdas.TryGetValue((itemSi.item, limb), out OnBandageUse onUseLambda)
-                || MinigameBase_StartMinigame_MultiplayerPatch.known_bandages_onuse_lambdas.TryGetValue(itemSi.item.id, out onUseLambda)) {
-                if (!healerPlr.IsLocal) {
-                    healerPlr.GetCoUtilsInstance().SelectForMPOverride();
-                    onUseLambda.Invoke(1f / 18f);
-                    if (itemSi.item != null && itemSi.item.condition < 0f) {
-                        itemSi.item.condition = 0f;
+        using (UseAck.Scope ack = UseAck.After(clientId, bandageId)) {
+            if (MedicalSync.Server_CheckCanHealerUseItemForLimb(clientId, targetPlr, limbId, bandageId, out ScavPlayer healerPlr, out NetBody targetNb, out SyncInfo itemSi)) {
+                Limb limb = targetNb.body.limbs[limbId];
+                if (MinigameBase_StartMinigame_MultiplayerPatch.known_bandage_instance_lambdas.TryGetValue((itemSi.item, limb), out OnBandageUse onUseLambda)
+                    || MinigameBase_StartMinigame_MultiplayerPatch.known_bandages_onuse_lambdas.TryGetValue(itemSi.item.id, out onUseLambda)) {
+                    if (!healerPlr.IsLocal) {
+                        healerPlr.GetCoUtilsInstance().SelectForMPOverride();
+                        onUseLambda.Invoke(1f / 18f);
+                        if (itemSi.item != null && itemSi.item.condition < 0f) {
+                            itemSi.item.condition = 0f;
+                        }
                     }
+
+                    BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter++;
+                    if (BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter > 14) {
+                        if (healerPlr.netBody != targetNb) {
+                            targetNb.body.happiness += 0.2f;
+                        }
+                        ServerMain.Server_AnnounceSound(targetNb.pos, "bandage", ServerMain.GetListOfClientIdsExceptThis(clientId));
+                        BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter = 0;
+                    }
+                    return;
                 }
 
-                BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter++;
-                if (BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter > 14) {
-                    if (healerPlr.netBody != targetNb) {
-                        targetNb.body.happiness += 0.2f;
-                    }
-                    ServerMain.Server_AnnounceSound(targetNb.pos, "bandage", ServerMain.GetListOfClientIdsExceptThis(clientId));
-                    BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter = 0;
-                }
+                ModLog.Error($"服务端未找到对应绷带闭包定义: itemId={itemSi.item.id}, sync={itemSi}", LogDomain.Medical);
+                healerPlr.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("serverdeny_bandage1"));
+                MinigameMPManager.Server_ForceEndMinigameForPlayer(healerPlr);
                 return;
             }
 
-            ModLog.Error($"服务端未找到对应绷带闭包定义: itemId={itemSi.item.id}, sync={itemSi}", LogDomain.Medical);
-            healerPlr.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("serverdeny_bandage1"));
-            MinigameMPManager.Server_ForceEndMinigameForPlayer(healerPlr);
-            return;
-        }
-
-        if (healerPlr != null) {
-            MinigameMPManager.Server_ForceEndMinigameForPlayer(healerPlr);
+            if (healerPlr != null) {
+                MinigameMPManager.Server_ForceEndMinigameForPlayer(healerPlr);
+            }
         }
     }
 
@@ -645,7 +709,7 @@ internal static class ItemsAndDevicesMinigameReceivers {
             "gore2",
             ServerMain.GetListOfClientIdsExceptThis(clientId));
 
-        lockpicker.FindByIdSurface("lockpickingkit", out Item kit);
+        Item kit = LockpingMinigame_Start_MultiplayerPatch.FindKit(lockpicker);
         if (lockpicker.skills.INT < 10) {
             kit = null;
         }

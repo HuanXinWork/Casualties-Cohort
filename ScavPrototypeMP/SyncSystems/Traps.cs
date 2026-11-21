@@ -58,6 +58,10 @@ public static class XalorisScript_OnWillRenderObject_MultiplayerPatch {
         float lastTime = 0f;
 
         void Update() {
+            // 热蕨脓毒休克仅由服务端权威累加并经医疗快照同步，避免客户端本地自增被服务端健康包回滚或双倍计算
+            if (Net.IsRunning && !Net.IsServer) {
+                return;
+            }
             if (Time.time - lastTime > 0.5f) {
                 lastTime = Time.time;
                 foreach (var obj in ScavPlayer.GetPlayerBodiesInRadius(transform.position, 5.5f)) {
@@ -75,6 +79,17 @@ public static class XalorisScript_OnWillRenderObject_MultiplayerPatch {
             return false;
         }
         return true;
+    }
+}
+
+// 房主镜头未照到热蕨时 OnWillRenderObject 永不触发，必须在 Start 阶段提前挂载联机接管组件以覆盖远处客户端
+[HarmonyPatch(typeof(XalorisScript), nameof(XalorisScript.Start))]
+static class XalorisScript_Start_MultiplayerPatch {
+    static void Postfix(XalorisScript __instance) {
+        if (!Net.IsRunning || __instance == null) {
+            return;
+        }
+        __instance.GetOrAddComponent<XalorisScript_OnWillRenderObject_MultiplayerPatch.Krokosha_XalorisScript_OverrideComponent>();
     }
 }
 
@@ -426,6 +441,9 @@ public class TrackerTurret : BaseComponentTracker<TurretScript> {
 
 public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
     bool announced_charge = false;
+    bool warnedLocal = false;
+    static float CannonChargeTime = 5f;
+    static float CannonMaxBlockedRange = 150f;
 
     public bool charging = false;
     public bool spent = false;
@@ -562,6 +580,13 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
         }
         chargeTime += Time.deltaTime;
 
+        if (!warnedLocal && chargeTime < CannonChargeTime * 0.8f) {
+            if (PlayerCamera.main != null && CanSeePos(transform, PlayerCamera.main.transform.position)) {
+                PlayerCamera.main.WarnSoundCannon(transform.position);
+                warnedLocal = true;
+            }
+        }
+
         var closestPlayerBody = GetClosestVisibleBody(transform);
         if (closestPlayerBody == null || closestPlayerBody.body == null) {
             return;
@@ -573,14 +598,10 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
         if (hostLocked) {
             PointBarrel(endAngle);
         } else if (base.transform.childCount > 0) {
-            base.transform.GetChild(0).eulerAngles = new Vector3(
-                0f,
-                0f,
-                Mathf.LerpAngle(base.transform.GetChild(0).eulerAngles.z, Vector2.SignedAngle(Vector2.up, goalLookDir), Time.deltaTime * 4f));
+            PointBarrel(Mathf.LerpAngle(base.transform.GetChild(0).eulerAngles.z, Vector2.SignedAngle(Vector2.up, goalLookDir), Time.deltaTime * 4f));
         }
 
-        Vector2 currentLookDir = base.transform.childCount > 0 ? (Vector2)base.transform.GetChild(0).up : Vector2.up;
-        if (chargeTime < 5f) {
+        if (chargeTime < CannonChargeTime) {
             return;
         }
 
@@ -596,19 +617,29 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
             PublishSpent();
         }
 
-        foreach (var plr in ScavPlayer.AllLivingPlayers) {
-            var body = plr.body;
-            if (body == null || plr.netBody == null) {
+        Fire();
+    }
+
+    void Fire() {
+        if (base.transform.childCount == 0) {
+            return;
+        }
+        Vector2 currentLookDir = base.transform.GetChild(0).up;
+
+        foreach (var nb in NetBody.all_instances) {
+            if (nb == null || nb.body == null) {
                 continue;
             }
-            Vector2 headpos = plr.netBody.GetHeadPos();
-            Vector2 goalDirForPlr = -KM.NormalTo(headpos, base.transform.position, out _);
+            var body = nb.body;
+            Vector2 headpos = nb.GetHeadPos();
+            Vector2 goalDirForPlr = -KM.NormalTo(headpos, base.transform.position, out float distanceToPlr);
             float dot = Vector2.Dot(currentLookDir, goalDirForPlr);
             bool inSameEnvironment = FluidManager.main.HasLiquid(WorldGeneration.world.WorldToBlockPos(base.transform.position)) == body.inWater;
+            bool isDirectHit = CanSeePos(transform, headpos) && dot > 0.55f && inSameEnvironment;
 
-            if (CanSeePos(transform, headpos) && dot > 0.55f && inSameEnvironment) {
+            if (isDirectHit) {
                 if (body.bodyAffect.wasWater) {
-                    if (plr.IsLocal) {
+                    if (nb.IsLocal) {
                         Sound.Play("sonarmegaouchfixed", base.transform.position, twoDimensional: true, pitchShift: false, null, 1f, 1f, noReverb: false, ignoreMixer: true);
                     }
                     body.hearingLoss = 100f;
@@ -617,13 +648,13 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
                     body.shock = 100f;
                     body.limbs[(int)LimbIndex.Head].pain = 100f;
                     body.brainHealth -= 20f;
-                    if (plr.IsLocal) {
+                    if (nb.IsLocal) {
                         PlayerCamera.main.shaker.Shake(3000f);
                         PlayerCamera.main.bonusAbber = -70f;
                         PlayerCamera.main.globalMuteTime += 120f;
                     }
                 } else {
-                    if (plr.IsLocal) {
+                    if (nb.IsLocal) {
                         Sound.Play("sonarouch", base.transform.position, twoDimensional: true, pitchShift: false, null, 1f, 1f, noReverb: false, ignoreMixer: true);
                     }
                     body.hearingLoss += 60f;
@@ -632,13 +663,13 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
                     body.shock = 65f;
                     body.limbs[(int)LimbIndex.Head].pain = 80f;
                     body.brainHealth -= 5f;
-                    if (plr.IsLocal) {
+                    if (nb.IsLocal) {
                         PlayerCamera.main.shaker.Shake(1000f);
                         PlayerCamera.main.bonusAbber = -30f;
                         PlayerCamera.main.globalMuteTime += 30f;
                     }
                 }
-                if (plr.IsLocal) {
+                if (nb.IsLocal) {
                     Sound.Play("tinnitus", base.transform.position, twoDimensional: true, pitchShift: false, null, 1f, 1f, noReverb: false, ignoreMixer: true);
                 }
                 body.consciousness -= 69f;
@@ -651,9 +682,13 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
                     obj.pain += 40f;
                 }
             } else {
+                // 限制隔墙冲击波的最大衰减作用半径，防止全图远端玩家被无视距离震晕
+                if (distanceToPlr > CannonMaxBlockedRange) {
+                    continue;
+                }
                 body.consciousness -= 30f;
                 body.eyeScareTime = 4f;
-                if (plr.IsLocal) {
+                if (nb.IsLocal) {
                     Sound.Play("sonarouchblocked", base.transform.position, twoDimensional: true, pitchShift: false, null, 1f, 1f, noReverb: false, ignoreMixer: true);
                     PlayerCamera.main.shaker.Shake();
                     PlayerCamera.main.globalMuteTime += 3f;

@@ -256,17 +256,8 @@ public static class MinigameBase_EndMinigame_MultiplayerPatch {
             return CombatStuff.CheckIfItsOkeyToDismemberThatLimb(limb);
         }
 
-        bool anyLegGone = false;
-        for (int i = (int)LimbIndex.FrontThigh; i < AnatomyConstants.StandardLimbCount; i++) {
-            if (limb.body.limbs[i].dismembered) {
-                anyLegGone = true;
-                break;
-            }
-        }
-
         return limb.infectionAmount > 60f
-            && Array.IndexOf(limb.body.limbs, limb) > (int)LimbIndex.LowerTorso
-            && (!anyLegGone || !limb.isLegLimb);
+            && Array.IndexOf(limb.body.limbs, limb) > (int)LimbIndex.LowerTorso;
     }
 }
 

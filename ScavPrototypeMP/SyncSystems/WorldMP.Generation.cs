@@ -17,6 +17,8 @@ namespace Together;
 /// </summary>
 public partial class WorldMP {
     static float WORLDCLEAR_MAX_HALT_TIME = 0.04f;
+    // 客户端会话断开时置 true；下次进入世界清场时连同旧世界残留的已注册网络对象一并移除，防止重连后新旧建筑叠放
+    public static bool ClientReturned;
     public static bool client_technically_finished_worldgen_now_just_waiting_for_server = false;
 
     internal static IEnumerator Patched_GenerateWorld(WorldGeneration world) {
@@ -140,6 +142,9 @@ public partial class WorldMP {
 
         ModLog.Info($"WorldGeneration.GenerateWorld (depth={depth})", LogDomain.World);
         yield return WorldGeneration_GenerateWorld_MultiplayerPatch.GenerateWorld(world);
+#if FULLGAME
+        LayerBuildingStream.HostRegister();
+#endif
     }
 
     internal static IEnumerator Patched_WorldPlacePlayer() {
@@ -181,22 +186,71 @@ public partial class WorldMP {
     }
 
     static IEnumerator FinishWorldGen_ClientClearWorldObjects() {
+        bool rejoin = ClientReturned;
+        ClientReturned = false;
         var items = FindObjectsOfType<Item>(true).Select(x => x.gameObject);
         var builds = FindObjectsOfType<BuildingEntity>(true).Select(x => x.gameObject);
         var allCandidates = items.Union(builds).ToList();
 
         world.loadingText.text = Lang.Get("worldgen_waitforserver_delete");
         double time = Time.realtimeSinceStartupAsDouble;
+        int kept = 0;
+        int destroyed = 0;
+        int failed = 0;
         for (int i = 0; i < allCandidates.Count; i++) {
             var go = allCandidates[i];
-            if (go == null || NetObjectRegistry.ObjectShouldNotBeSynced(go) || NetObjectRegistry.IsRegistered(go)) {
+            if (go == null) {
                 continue;
             }
-            GameObject.Destroy(go);
+            bool onBody = false;
+            try {
+                onBody = go.GetComponentInParent<Body>() != null;
+            } catch (Exception) {
+            }
+            bool registered = false;
+            try {
+                registered = NetObjectRegistry.IsRegistered(go);
+            } catch (Exception) {
+            }
+            // 首次进图保留已注册同步对象与身上装备；断线重连进图必须清理上一会话残留在注册表中的旧世界副本
+            if (NetObjectRegistry.ObjectShouldNotBeSynced(go) || onBody || (registered && !rejoin)) {
+                kept++;
+                continue;
+            }
+            try {
+                if (registered) {
+                    DropStaleRegistration(go);
+                }
+                GameObject.Destroy(go);
+                destroyed++;
+            } catch (Exception ex) {
+                failed++;
+                ModLog.Error("[join] world clear " + ex.Message, LogDomain.World);
+            }
             if (Time.realtimeSinceStartupAsDouble - time > WORLDCLEAR_MAX_HALT_TIME) {
                 yield return null;
                 time = Time.realtimeSinceStartupAsDouble;
             }
+        }
+        ModLog.Info($"[join] world clear rejoin={rejoin} kept={kept} destroyed={destroyed} failed={failed}", LogDomain.World);
+    }
+
+    static void DropStaleRegistration(GameObject go) {
+        if (go == null || NetObjectRegistry.SyncRegistry == null) {
+            return;
+        }
+        if (!NetObjectRegistry.SyncRegistry.TryGetValue(go, out SyncInfo si) || si == null) {
+            return;
+        }
+        NetObjectRegistry.SyncRegistry.Remove(go);
+        if (NetObjectRegistry.NetIdToSyncInfoDict != null) {
+            try {
+                NetObjectRegistry.NetIdToSyncInfoDict.Remove(si.syncId);
+            } catch (Exception) {
+            }
+        }
+        if (go.TryGetComponent(out SyncInfoGameObjectTracker tracker)) {
+            tracker.syncInfo = null;
         }
     }
 
@@ -327,8 +381,13 @@ public partial class WorldMP {
 
         if (Multiplayer.IsNetworkActiveAndIsClient() && ClientMain._last_reminderpack_while_generating_received) {
             if (ScavPlayer.TryGetLocalNetBody(out var lpb)) {
-                ModLog.Debug($"CLIENT: Applying starter char state packet at {ClientMain._last_reminderpack_while_generating.Position}", LogDomain.World);
-                lpb.OnReceiveSyncPacket(ClientMain._last_reminderpack_while_generating, true);
+                ModLog.Info($"[join] starter apply begin pos={ClientMain._last_reminderpack_while_generating.Position}", LogDomain.World);
+                try {
+                    lpb.OnReceiveSyncPacket(ClientMain._last_reminderpack_while_generating, true);
+                    ModLog.Info("[join] starter apply end", LogDomain.World);
+                } catch (Exception ex) {
+                    ModLog.Exception(LogDomain.World, "[join] starter apply", ex);
+                }
             } else {
                 ModLog.Error($"CLIENT: Starter char state packet received without local body at {ClientMain._last_reminderpack_while_generating.Position}", LogDomain.World);
             }
@@ -514,6 +573,7 @@ public partial class WorldMP {
                 }
 #if FULLGAME
                 BlueHeartMp.Server_EnsureCargoOnAscentLoad(plr);
+                LayerBuildingStream.HostRegister();
 #endif
 
                 foreach (var item in NetObjectRegistry.GatherClosestObjectsToSync(plr.pos, plr.body, 64)) {
@@ -523,8 +583,10 @@ public partial class WorldMP {
                     PlayerCheckpoint.SendCrafted(crafted);
                 }
                 TraderSync.SendTraderState(clientId);
+                ServerMain.SendRulesTo(new List<knetid> { clientId });
             } else if (ScavPlayer.TryGetPlayerFromClientId(clientId, out plr) && plr != null) {
                 TraderSync.SendTraderState(clientId);
+                ServerMain.SendRulesTo(new List<knetid> { clientId });
             }
         } finally {
             KrokV5Optimization.FixRejoinBaseline.After(clientId, queueBaseline);

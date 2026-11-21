@@ -245,7 +245,17 @@ static class Body_GetTotalEncumberance_MultiplayerPatch {
     public static void Postfix(Body __instance, ref float __result) {
         if (Net.IsRunning && __instance.TryGetComponent<NetBody>(out var npc) && npc.carrying_person != null) {
             float realWeight = npc.carrying_person.GetRealFullEncumberanceOfBody();
-            __result += realWeight * Multiplayer.rules.PiggybackWeightMultiplier;
+            float species = 1f;
+            Body carried = npc.carrying_person.body;
+            if (carried != null) {
+                // 按被背负角色物种附加负重系数：0 Experiment (1.0x), 1 Milky (1.2x), 2 Dune (0.8x)
+                if (carried.charType == 1) {
+                    species = 1.2f;
+                } else if (carried.charType == 2) {
+                    species = 0.8f;
+                }
+            }
+            __result += realWeight * Multiplayer.rules.PiggybackWeightMultiplier * species;
         }
     }
 }

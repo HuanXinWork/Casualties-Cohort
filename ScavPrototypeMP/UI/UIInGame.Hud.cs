@@ -288,18 +288,24 @@ namespace Together {
             }
 
             ScavPlayer me = ScavPlayer.LocalPlayer;
-            if (me != null && me.body != null && me.netBody != null && !Util.IsInWoundView() && me.body.conscious) {
+            NetBody mine = (me != null && me.body != null) ? me.netBody : null;
+            if (!Util.IsInWoundView() && me != null && me.body != null && me.body.conscious && mine != null) {
                 float buttonHeight = 80f * uisc;
-                if (me.netBody.piggybacking_on != null) {
-                    if (UIBullshit._GUI_FocusableButton(new Rect(Screen.width * 0.5f - wdth2 * 0.5f, Screen.height * 0.9f - 10f * uisc, wdth2, buttonHeight), Lang.Get("piggyback_stop") + "\n" + me.netBody.piggybacking_on.bodyName, out bool focused)) {
-                        me.netBody.StopPiggyback();
+                NetBody riding = mine.piggybacking_on;
+                NetBody carried = mine.carrying_person;
+                if (riding != null) {
+                    if (UIBullshit._GUI_FocusableButton(new Rect(Screen.width * 0.5f - wdth2 * 0.5f, Screen.height * 0.9f - 10f * uisc, wdth2, buttonHeight), Lang.Get("piggyback_stop") + "\n" + riding.bodyName, out bool focused)) {
+                        mine.StopPiggyback();
                     }
                     interaction_menu_focused = interaction_menu_focused || focused;
-                } else if (me.netBody.carrying_person != null) {
-                    if (UIBullshit._GUI_FocusableButton(new Rect(Screen.width * 0.5f - wdth2 * 0.5f, Screen.height * 0.9f - 10f * uisc, wdth2, buttonHeight), Lang.Get("carry_stop") + "\n" + me.netBody.carrying_person.bodyName, out bool focused)) {
-                        me.netBody.carrying_person.SetNetIgnoreTime(0.2f);
+                } else if (carried != null) {
+                    if (UIBullshit._GUI_FocusableButton(new Rect(Screen.width * 0.5f - wdth2 * 0.5f, Screen.height * 0.9f - 10f * uisc, wdth2, buttonHeight), Lang.Get("carry_stop") + "\n" + carried.bodyName, out bool focused)) {
+                        carried.SetNetIgnoreTime(0.2f);
+                        // 房主本地发包会同步清空 mine.carrying_person，提前缓存 carried 引用避免空指针
                         Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_RequestStopCarryPerson);
-                        me.netBody.carrying_person.StopPiggyback();
+                        if (carried.piggybacking_on != null) {
+                            carried.StopPiggyback();
+                        }
                     }
                     interaction_menu_focused = interaction_menu_focused || focused;
                 }

@@ -55,6 +55,8 @@ namespace Together {
 
         private void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t pCallback) {
             try {
+                // 已销毁的旧 Transport 实例仍可能收到 Steam 排队的残留连接状态回调，直接忽略
+                if (!ReferenceEquals(Net.Transport, this)) return;
                 // dedicated browser-ping virtual port - never treat as a game client
                 if (BrowserSteamPing.HandleTransportCallback(pCallback)) {
                     return;
@@ -133,9 +135,10 @@ namespace Together {
                         KSteam.steamtestlog($"OnConnectionStatusChanged: Connection closed for {BetterToStringFromSteamID(client_steamId)} state changed: {pCallback.m_info.m_eState}    lobby owner:{BetterToStringFromSteamID(KSteam.CURRENT_LOBBY.ownerID.m_SteamID)}");
                     }
 
+                    if (LobbyHostTransfer.HandlePlannedDisconnect(client_steamId)) return;
                     if (client_steamId == KSteam.CURRENT_LOBBY.ownerID.m_SteamID) {
                         Multiplayer.ShutdownNetwork();
-                        Multiplayer.DoMultiplayerStatusMessageLog($"Steam: Connection closed: {pCallback.m_info.m_eState.ToString().TrimStart("k_ESteamNetworkingConnectionState_")}");
+                        Multiplayer.DoMultiplayerStatusMessageLog(string.Format(Lang.Get("steam_connection_closed"), pCallback.m_info.m_eState.ToString().TrimStart("k_ESteamNetworkingConnectionState_")));
                     } else {
                         ESteamNetConnectionEnd endReason = (ESteamNetConnectionEnd)pCallback.m_info.m_eEndReason;
                         string endDebug = OneLine(pCallback.m_info.m_szEndDebug);
@@ -226,7 +229,7 @@ namespace Together {
                 log.l(this.GetType().Name + "CreateServerSocket!");
             }
 
-            return true;
+            return listenSocket != HSteamListenSocket.Invalid;
         }
 
         internal bool CreateClientSocket() {
@@ -262,7 +265,7 @@ namespace Together {
                 }
 
                 connectionMapping.Add((ulong)ConnectToSteamID, serverUser);
-                return true;
+                return serverUser.connection != HSteamNetConnection.Invalid;
             } catch (Exception ex) {
                 log.error($"{this.GetType().Name}.CreateClientSocket : Client could not be started !! {ex.Message}");
                 return false;
@@ -281,7 +284,7 @@ namespace Together {
             SteamAPICall_t handle = SteamMatchmaking.CreateLobby(lobbyType, Multiplayer.PLAYER_COUNT_LIMIT);
             KSteam.OnLobbyCreatedCallResult.Set(handle);
 
-            Multiplayer.DoMultiplayerStatusMessageLog("STEAM: Creating Lobby...");
+            Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_creating_lobby"));
 
             if (log.verbose) {
                 log.l(this.GetType().Name + ".CreateLobby");
@@ -305,7 +308,7 @@ namespace Together {
 
             if (!Net.VerifyMyServerName()) {
                 if (!NsfwContentFilter.LastCreateWasRejected) {
-                    Multiplayer.DoMultiplayerStatusMessageLog("Invalid Server name.");
+                    Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("net_invalid_server_name"));
                 }
                 return false;
             }

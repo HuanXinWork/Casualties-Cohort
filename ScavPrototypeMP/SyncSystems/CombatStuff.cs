@@ -69,29 +69,6 @@ internal class CombatStuff : CasualtiesTogetherSingleton {
                     return false;
                 }
             }
-        } else if (limb.body.alive) {
-            bool anyLegRemoved = false;
-            for (int i = (int)LimbIndex.FrontThigh; i < AnatomyConstants.StandardLimbCount; i++) {
-                if (limb.body.limbs[i].dismembered) {
-                    anyLegRemoved = true;
-                    break;
-                }
-            }
-
-            bool anyArmRemoved = false;
-            for (int i = (int)LimbIndex.PrimaryUpperArm; i < (int)LimbIndex.FrontThigh; i++) {
-                if (limb.body.limbs[i].dismembered) {
-                    anyArmRemoved = true;
-                    break;
-                }
-            }
-
-            if (limb.isArm && anyArmRemoved) {
-                return false;
-            }
-            if (limb.isLegLimb && anyLegRemoved) {
-                return false;
-            }
         }
         return true;
     }

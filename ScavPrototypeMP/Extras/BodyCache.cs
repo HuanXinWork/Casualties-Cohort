@@ -8,12 +8,11 @@ using KrokV5Optimization;
 namespace Together;
 
 /// <summary>
-/// Body.Update asks for Painkillers every frame, and the half-second pass asks for MindwipeScript.
-/// the result stays until the component is gone. a miss is tried again after a short wait, so a later add still lands.
-/// visuals, sounds, and the ground cast stay every frame.
+/// 缓存 <see cref="Body.Update"/> 每帧查询的 <see cref="global::Painkillers"/> 与 <see cref="Body.HandlePeriodicChecks"/> 半秒查询的 <see cref="MindwipeScript"/>。
+/// 必须声明为 <c>public</c> 以保证跨程序集 Harmony DMD 调用可见性；<see cref="Swap"/> 识别已挂载指令以兼容 <c>Plugin.DoHarmonyPatchAll</c> 与 <c>OptimizerMain</c> 双重扫描幂等性。
 /// </summary>
 [HarmonyPatch]
-internal static class BodyCache
+public static class BodyCache
 {
 	const int RetryFrames = 45;
 
@@ -26,8 +25,9 @@ internal static class BodyCache
 	}
 
 	static readonly Dictionary<int, Slot> Slots = new Dictionary<int, Slot>(16);
+	static int _prunePendingAt = StaleIds.FirstThreshold;
 
-	internal static Painkillers Painkillers(Body body)
+	public static Painkillers Painkillers(Body body)
 	{
 		Slot slot = SlotFor(body);
 		if (slot.Pain != null)
@@ -39,7 +39,7 @@ internal static class BodyCache
 		return slot.Pain;
 	}
 
-	internal static MindwipeScript Mindwipe(Body body)
+	public static MindwipeScript Mindwipe(Body body)
 	{
 		Slot slot = SlotFor(body);
 		if (slot.Wipe != null)
@@ -71,12 +71,20 @@ internal static class BodyCache
 		bool found = false;
 		foreach (CodeInstruction code in instructions)
 		{
-			if (!found && code.opcode == OpCodes.Callvirt && code.operand is MethodInfo site
-				&& site.IsGenericMethod && site.GetGenericArguments()[0] == component)
+			if (!found)
 			{
-				code.opcode = OpCodes.Call;
-				code.operand = call;
-				found = true;
+				if (code.opcode == OpCodes.Call && code.operand is MethodInfo existing
+					&& existing.DeclaringType == typeof(BodyCache) && existing.Name == method)
+				{
+					found = true;
+				}
+				else if (code.opcode == OpCodes.Callvirt && code.operand is MethodInfo site
+					&& site.IsGenericMethod && site.GetGenericArguments()[0] == component)
+				{
+					code.opcode = OpCodes.Call;
+					code.operand = call;
+					found = true;
+				}
 			}
 			yield return code;
 		}
@@ -90,6 +98,7 @@ internal static class BodyCache
 		if (!Slots.TryGetValue(id, out Slot slot))
 		{
 			slot = new Slot();
+			StaleIds.Prune<Body, Slot>(Slots, ref _prunePendingAt);
 			Slots[id] = slot;
 		}
 		return slot;

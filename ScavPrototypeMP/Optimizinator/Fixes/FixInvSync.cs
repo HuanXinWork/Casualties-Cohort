@@ -43,6 +43,7 @@ internal static partial class FixInvSync {
     private static readonly List<SyncInfo> Batch = new List<SyncInfo>(256);
     private static readonly HashSet<SyncInfo> Seen = new HashSet<SyncInfo>();
     private static readonly Dictionary<int, Wait> Pending = new Dictionary<int, Wait>();
+    private static readonly List<KeyValuePair<int, Wait>> PendingUpdates = new List<KeyValuePair<int, Wait>>();
     private static readonly Dictionary<int, Fingerprint> Exhausted = new Dictionary<int, Fingerprint>();
     private static readonly Dictionary<ushort, byte> SeenContainerVer = new Dictionary<ushort, byte>();
     private static readonly List<int> Done = new List<int>();
@@ -97,7 +98,11 @@ internal static partial class FixInvSync {
         if (info == null || info.item == null)
             return;
         int id = info.item.GetInstanceID();
-        Pending.Remove(id);
+        if (_ticking) {
+            Done.Add(id);
+        } else {
+            Pending.Remove(id);
+        }
         Exhausted.Remove(id);
     }
 

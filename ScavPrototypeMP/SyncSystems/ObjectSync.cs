@@ -109,7 +109,15 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
     Transform _heldParent;
     bool _held;
     bool _wasLoose;
+    int _crystal = -1;
     float distanceCheckTime = 0f;
+
+    internal bool IsCrystal() {
+        if (_crystal < 0) {
+            _crystal = GetComponent<CrystalEnemy>() != null ? 1 : 0;
+        }
+        return _crystal == 1;
+    }
 
     public override string ToString() {
         if (this == null)
@@ -208,11 +216,24 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
             return;
 
         if (!Net.IsServer) {
+            // 水晶怪（CrystalEnemy）高速突进时必须每物理步更新姿态，跳过视野外 15 步节流防止突刺位置滞后一个区块
+            if (IsCrystal()) {
+                visualUpdateTimer = 0;
+                syncInfo.ClientFixedUpdate();
+                return;
+            }
             visualUpdateTimer++;
             if (!isVisible && visualUpdateTimer < VisualUpdateSlowerWhenNotVisible)
                 return;
             visualUpdateTimer = 0;
             syncInfo.ClientFixedUpdate();
+            return;
+        }
+
+        // 服务端每物理步写入水晶怪姿态，供实体网络 Tick 即时下发而非等待慢速区块扫描
+        if (IsCrystal()) {
+            visualUpdateTimer = 0;
+            syncInfo.WriteObjectIntoPacket();
             return;
         }
 
@@ -268,6 +289,13 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
             syncInfo.Destroy();
             syncInfo = null;
         }
+    }
+
+    void LateUpdate() {
+        if (!Net.IsRunning || Net.IsServer || syncInfo == null || !IsCrystal())
+            return;
+        // 物理帧仅采样快照到达点，渲染帧间由 ClientCrystalPose 平滑插值水晶怪轨迹
+        syncInfo.ClientCrystalPose();
     }
 
     void Update() {

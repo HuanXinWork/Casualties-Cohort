@@ -1,6 +1,30 @@
-"Casualties: Together" Co-Op Mod
-Official link: https://github.com/creaturefeaturelarry/casualties-together
-Support the developer: https://buymeacoffee.com/casualtiestogether
+"Casualties: Cohort" Co-Op Mod (Fork of Casualties: Together)
+Repository:   https://github.com/HuanXinWork/Casualties-Cohort
+Upstream Mod: https://github.com/creaturefeaturelarry/casualties-together
+
+
+ --- 5.5.4 --- 21.11.2026 --- Cohort v5.5.4 Protocol Sync & CI Release Pipeline ---
+- Protocol & Upstream v5.5.4 Feature Parity
+	Aligned wire protocol, SyncVars, NetmsgId, and MultiplayerGameRules with Casualties: Together v5.5.4 (100% lobby-compatible)
+	Added live Host Migration (HostTransfer) to hand off world, entities, and player archives when the host leaves
+	Added collapsible rule categories, keyword search, and category/global reset in the lobby configuration menu
+	Added dedicated main-menu Language settings tab and synchronized all 5 locales (EN, es-ES, ru-RU, zh-CN, zh-TW β€” 706 keys)
+	Added adaptive deep-layer world simulation bounds, v4 ragdoll kinematic snapshots, crystal enemy sync, and grabber plant yank sync
+	Removed legacy auto-updater projects and deprecated autoupdater_patcher.dll
+- Casualties: Cohort Architecture & Cross-Mod API
+	Full modular split keeping every first-party .cs source file <= 800 lines with zero Harmony003 warnings
+	Exposed Together.Api (TogetherPanelApi, TogetherSaveWorldApi, TogetherNetworkApi) and Together.ModHooks static facade for zero-reflection companion mod integration (SkinSync, CuSaveManager)
+	Dual-mode Release/Debug structured communication diagnostics and single-player passthrough guards
+- Game v1.0.2 Runtime Stability & Defect Fixes
+	Fixed PlayerCamera.SetTimeScale 4-parameter Harmony target signature and tutorial MovementCourse.Sequence coroutine short-circuit
+	Fixed cross-assembly DMD public visibility on chunk hash, sim-range, and body cache helpers
+	Fixed Mono Dictionary InvalidOperationException during client inventory retry updates
+	Replaced OS font loading with Font.GetPathsToOSFonts() dynamic fallback generation for CJK/Cyrillic rendering
+	Retained Cohort fixes for UseAck compatibility probing, unlabeled canned food, firearm null guards, prosthetic suturing, tick nests, stimulants, drag finalizers, and disconnect safety guards
+- Packaging & Zero-Secret CI/CD
+	Added stripped metadata reference stubs (references/*.dll) and generate-ref-stubs.ps1 for zero-secret cloud/offline builds
+	Standardized release packages to CasualtiesCohort-<tag>.zip and +debug variants with top-level BepInEx/plugins/Together/ layout
+	Added GitHub Actions workflow for PR/push verification, automatic formal tag releases, and daily conditional nightly pre-releases
 
 
 KNOWN ISSUES:
@@ -494,7 +518,7 @@ Special thanks for participation goes to:
  - avr - @avr_crtscc  - playtester
  - ItsVoidSK - @itsvoidskilled  - playtester
  - {Pixel} - @canned_pixels  - playtester
- - Μπΰκ 2.0 - @mrakmm  - playtester
+ - ΠΡ€Π°ΠΊ 2.0 - @mrakmm  - playtester
  - Shade - @waz2280  - playtester
  - Dictator - @snow_5107  - playtester
 

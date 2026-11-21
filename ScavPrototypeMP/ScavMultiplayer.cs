@@ -237,11 +237,11 @@ public partial class Multiplayer : MonoBehaviour {
 
     public static bool AdditionalApprovalCheck(ref NetDataReader reader, string plrname, ref string reject_reason) {
         if (reject_reason == null) {
-            reject_reason = "Connection rejected";
+            reject_reason = "<key:deny_connection_rejected>";
         }
 
         if (Util.IsInWorld() && !rules.LateJoinAllowed) {
-            reject_reason = "Game is already in progress.";
+            reject_reason = "<key:deny_game_in_progress>";
             return false;
         }
 
@@ -392,17 +392,17 @@ public partial class Multiplayer : MonoBehaviour {
     /// </summary>
     public static bool IsValidPlayerName(string name, out string denyReason) {
         if (string.IsNullOrEmpty(name)) {
-            denyReason = "Name too short.";
+            denyReason = Lang.Get("net_name_too_short");
             return false;
         }
         string sanitized = SanitizeUnicodeTextInput(name);
         if (!string.Equals(name, sanitized, StringComparison.Ordinal)) {
-            denyReason = "Invalid Name.";
+            denyReason = Lang.Get("net_invalid_name");
             return false;
         }
         int minLen = ContainsNonAscii(name) ? 1 : 3;
         if (name.Length < minLen) {
-            denyReason = "Name too short.";
+            denyReason = Lang.Get("net_name_too_short");
             return false;
         }
         denyReason = null;
@@ -552,6 +552,13 @@ public partial class Multiplayer : MonoBehaviour {
         }
 
         Plugin.s.SendMessage("KrokoshaSingletonEvent_OnRulesUpdate", SendMessageOptions.DontRequireReceiver);
+
+        // 中途加入者会接收开局捕获的快照包，需保持其中规则字段与当前实时规则同步
+        if (Net.IsServer) {
+            ServerMain.StartGameAnnouncementPacket packet = ServerMain.LastStartGameAnnouncementPacket;
+            packet.rules = rules;
+            ServerMain.LastStartGameAnnouncementPacket = packet;
+        }
     }
 
     public static bool IsNetworkActiveAndIsServer() => Net.IsRunning && Net.IsServer;

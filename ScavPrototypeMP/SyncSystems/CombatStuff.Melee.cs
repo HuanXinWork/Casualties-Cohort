@@ -24,6 +24,10 @@ internal static class MeleeCombatSync {
 
     private static readonly Dictionary<knetid, double> LastAttackAt = new();
 
+    public static void Forget(knetid client) {
+        LastAttackAt.Remove(client);
+    }
+
     internal static Body LastAttacker;
     internal static AttackInfo LastAttackInfo = new();
     internal static Limb LastHitLimb;
@@ -479,6 +483,7 @@ internal static class MeleeCombatSync {
         plr.body.targetLookPos = targetlookpos;
         try {
             HostRerunAttacker = plr.body;
+            Body_Attack_MultiplayerPatch.ForceHitResult = didHitConfirmed;
             if (toolSi == null) {
                 plr.body.Attack(CombatStuff.default_unarmed_attackinfo, plr.body.handSlot);
             } else {
@@ -486,6 +491,7 @@ internal static class MeleeCombatSync {
             }
         } finally {
             HostRerunAttacker = null;
+            Body_Attack_MultiplayerPatch.ForceHitResult = false;
         }
 
         if (!LastAttackResult && didHitConfirmed) {

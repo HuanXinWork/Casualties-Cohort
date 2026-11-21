@@ -167,22 +167,24 @@ public partial class WorldChunkSync : CasualtiesTogetherSingleton {
                 var plr = ScavPlayer.LocalPlayer;
                 if (plr && !world.doingRegen && !world.generatingWorld && world.worldExists && !plr.finishedLayer) {
                     plr.finishedLayer = true;
-                    if (ServerMain.GetNumberOfPlayersRequiredToFinishLayer() != 1) {
+                    // 房主已死亡且出口人数达标时由 DeadHostExitPanel 统一接管提示，抑制常规等待横幅避免重复提示
+                    bool hostDown = ServerMain.HostBodyIsDead() && ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
+                    if (!hostDown && ServerMain.GetNumberOfPlayersRequiredToFinishLayer() != 1) {
                         PlayerCamera.main.DoAlert(Lang.Get("layerfinish_wait_for_friends"));
-                    } else {
+                    } else if (!hostDown) {
                         PlayerCamera.main.DoAlert(Lang.Get("layerfinish_wait_for_host"));
                     }
                 }
 
                 if (Net.IsClient) {
+                    // 原版每帧对站在出口的角色打开该面板，联机客户端始终隐藏本地原生面板
                     world.savePanel.SetActive(value: false);
-                } else {
-                    bool enoughReady = ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
-                    if (enoughReady != world.savePanel.activeSelf) {
-                        world.savePanel.SetActive(enoughReady);
-                    }
                 }
             }
+        }
+
+        if (Net.IsServer) {
+            WorldGeneration_Update_DeadHostExitPanel.ApplyHostExitPanel(world);
         }
 
         if (Net.IsServer) {

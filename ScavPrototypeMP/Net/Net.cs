@@ -270,6 +270,7 @@ namespace Together {
 
                 RPCManager_Initialize_MultiplayerPatch.QuickReset();
 
+                bool wasClient = IsClient && wasRunning;
                 if (IsClient) {
                     MP3Menu.dropdownList = null;
                     if (!String.IsNullOrEmpty(_clientRunSettingsBeforeConnect)) {
@@ -283,7 +284,13 @@ namespace Together {
                 _clientRunSettingsBeforeConnect = null;
 
                 IsRunningSteam = false;
-                Type = NetType.Host;
+                // 先清零 IsRunning 并将离线角色归位为 Client，防止退回主菜单后因 IsServer(!IsClient) 误触发宿主侧物品销毁逻辑
+                IsRunning = false;
+                Type = NetType.Client;
+                if (wasClient) {
+                    WorldMP.ClientReturned = true;
+                }
+                log.l("[join] shutdown, role cleared");
                 ClientMain.LOCAL_PING = 0;
                 ClientMain._last_sync_time = 0;
 
@@ -304,7 +311,6 @@ namespace Together {
                     }
                 }
 
-                IsRunning = false;
                 UnicodeFontFallback.ResetClientSyncState();
                 ModHooks.LastAppliedCustomWorldSeed = 0;
                 ModHooks.PendingClientCustomWorldSeed = 0;
@@ -356,7 +362,7 @@ namespace Together {
         internal static void TransportCreated(NetType ntype, bool save_name = true) {
             Plugin.SkipMainMenuIntro();
 
-            // 必须先写入 Net.Type，确保客户端连接前正确备份本地单人运行设置
+            // 必须先将 Net.Type 切换为本次目标会话角色，再依据 IsClient 决定是否捕获入房前单人设置快照
             Net.Type = ntype;
 
             if (IsClient) {

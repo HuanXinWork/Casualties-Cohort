@@ -19,6 +19,9 @@ namespace Together;
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.StartRun))]
 public static class PreRunScript_StartRun_MultiplayerPatch {
     static bool Prefix(PreRunScript __instance) {
+        if (!LobbyHostTransfer.AllowRun(false)) {
+            return false;
+        }
         if (!Net.IsRunning) {
             if (TogetherSaveWorldApi.ShouldBypassSingleplayerBlock()) {
                 return true;
@@ -32,7 +35,7 @@ public static class PreRunScript_StartRun_MultiplayerPatch {
         return false;
 #else
         if (Net.IsClient) {
-            Multiplayer.DoMultiplayerStatusMessageLog("You can't start the game, server can.");
+            Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("client_cant_start_game"));
             return false;
         }
         SaveSystem.loadedRun = false;
@@ -47,6 +50,9 @@ public static class PreRunScript_StartRun_MultiplayerPatch {
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.LoadRun))]
 public static class PreRunScript_LoadRun_MultiplayerPatch {
     static bool Prefix(PreRunScript __instance) {
+        if (!LobbyHostTransfer.AllowRun(true)) {
+            return false;
+        }
         if (!Net.IsRunning) {
             if (TogetherSaveWorldApi.ShouldBypassSingleplayerBlock()) {
                 return true;
@@ -60,7 +66,7 @@ public static class PreRunScript_LoadRun_MultiplayerPatch {
         return false;
 #else
         if (Net.IsClient) {
-            Multiplayer.DoMultiplayerStatusMessageLog("You can't start the game, server can.");
+            Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("client_cant_start_game"));
             return false;
         }
         SaveSystem.loadedRun = true;
@@ -73,9 +79,12 @@ public static class PreRunScript_LoadRun_MultiplayerPatch {
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.StartTutorial))]
 public static class PreRunScript_StartTutorial_MultiplayerPatch {
     static bool Prefix(PreRunScript __instance) {
+        if (!LobbyHostTransfer.AllowRun(false)) {
+            return false;
+        }
         if (Net.IsRunning) {
             if (Net.IsClient) {
-                Multiplayer.DoMultiplayerStatusMessageLog("You can't start the game, server can.");
+                Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("client_cant_start_game"));
                 return false;
             }
 #if FULLGAME
@@ -160,8 +169,30 @@ static class WorldGeneration_Start_MultiplayerPatch {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.SetBlockNoUpdate))]
 static class WorldGenerationSetBlockNoUpdatePatch {
     static bool Prefix(WorldGeneration __instance, ref Vector2Int pos, ushort block) {
+        if (__instance == null || __instance.worldBlocks == null) {
+            return false;
+        }
         WorldGeneration_SetBlock_MultiplayerPatch.QueueBlockChange(__instance, in pos, block, true);
         return true;
+    }
+}
+
+/// <summary>
+/// 防御客户端等待世界生成参数或首帧进图期间原版 <see cref="WorldGeneration.Update"/> 未检查 <c>generatingWorld</c> 即触发地震调用
+/// <c>SetBlock -&gt; UpdateChunkClosest -&gt; UpdateChunk(Vector2Int chunk)</c>（此时二维数组 <c>chunks</c> 虽已分配但 <c>InstantiateChunks()</c> 尚未填充元素，解引用 <c>chunks[chunk.x, chunk.y]</c> 必抛 <see cref="NullReferenceException"/>）。
+/// </summary>
+[HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.UpdateChunk), new[] { typeof(Vector2Int) })]
+public static class WorldGeneration_UpdateChunk_NullGuardPatch {
+    public static bool Prefix(WorldGeneration __instance, [HarmonyArgument(0)] ref Vector2Int chunk) {
+        if (__instance == null || __instance.chunks == null || __instance.worldBlocks == null) {
+            return false;
+        }
+        int cx = chunk.x;
+        int cy = chunk.y;
+        if (cx < 0 || cy < 0 || cx >= __instance.chunks.GetLength(0) || cy >= __instance.chunks.GetLength(1)) {
+            return false;
+        }
+        return __instance.chunks[cx, cy] != null;
     }
 }
 
@@ -243,8 +274,11 @@ public static class WorldGeneration_SetBlock_MultiplayerPatch {
         }
     }
 
-    static bool Prefix(WorldGeneration __instance, Vector2Int pos, ushort block) {
-        QueueBlockChange(__instance, pos, block, false);
+    static bool Prefix(WorldGeneration __instance, ref Vector2Int pos, ushort block) {
+        if (__instance == null || __instance.worldBlocks == null) {
+            return false;
+        }
+        QueueBlockChange(__instance, in pos, block, false);
         return true;
     }
 }
@@ -316,8 +350,9 @@ public static class WorldGeneration_CreateExplosion_MultiplayerPatch {
 
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.RegenerateWorld))]
 public static class RegenerateWorldPatch {
-    public static void Prefix(WorldGeneration __instance) {
+    public static void Prefix(WorldGeneration __instance, bool __0) {
         try {
+            LobbyHostTransfer.ArmBoundary(__instance, __0);
             Con.UnNoclip();
 
             if (Net.IsRunning) {
@@ -326,7 +361,7 @@ public static class RegenerateWorldPatch {
                     writer.Put((ushort)(__instance.doPod ? 1 : 0));
                     Net.Server_SendToClientsVeryReliable(writer, ServerMain.AllClientIdsExceptHost);
 
-                    Multiplayer.DoMultiplayerStatusMessageLog("Announced RegenerateWorld.");
+                    Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("worldgen_announced_regen"));
 
                     if (!Multiplayer.rules.RespawnKeepInventory) {
                         foreach (var kv in ScavPlayer.BodyToPlayerDict) {

@@ -93,10 +93,7 @@ public partial class NetBody {
                         }, () => {
                             Util.DelayCallLambda(1f, () => {
                                 Multiplayer.Server_SendSimpleMessageToOneClient(NetmsgId.CLIENT_forcespectator, plr.playerId);
-                                string alert = endLab && !hasSuitcase
-                                    ? "Late join into Ending Lab — spectator only (no suitcase)."
-                                    : "Late join, server put you in spectator mode.";
-                                plr.Server_DoAlertSingle(alert, true, true);
+                                plr.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("latejoin_spectator_alert"), true, true);
                             });
                         });
                     }

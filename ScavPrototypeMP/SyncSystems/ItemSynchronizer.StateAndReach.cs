@@ -255,6 +255,11 @@ internal partial class ItemSync {
                     soundName = "gunloadmag";
                 } else if (gun.feedType == GunScript.FeedType.Direct && ammo2.itemType == AmmoScript.AmmoItemType.Round && gun.roundsInMag < gun.magCapacity) {
                     soundName = "gunloadshell";
+                } else if (gun.feedType == GunScript.FeedType.Direct && ammo2.itemType == AmmoScript.AmmoItemType.Magazine && ammo2.rounds > 0) {
+                    bool room = gun.roundsInMag < gun.magCapacity || (gun.racked && gun.roundInChamber == GunScript.RoundInChamber.None);
+                    if (room && ScavPlayer.TryGetPlayerAndBodyFromClientId(combinerClientId, out _, out Body combiner) && combiner != null && combiner.charType == 1) {
+                        soundName = "gunloadshell";
+                    }
                 }
             }
         } else if ((bool)ammo1 && (bool)ammo2) {

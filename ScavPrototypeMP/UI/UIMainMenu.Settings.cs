@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using TMPro;
 using Together.Api;
 using Together.Diagnostics;
 using Unity.VisualScripting;
@@ -29,6 +30,16 @@ public static partial class UIMainMenu {
         name = "mmst_gui",
         gui_func = _GUI___SettingsGUI,
         settings_origin = typeof(UIBullshit)
+    };
+
+    internal static SettingsTab _language_setting_tab = new SettingsTab {
+        name = "mmst_language",
+        gui_func = _GUI___SettingsLanguage,
+        on_reset = () => {
+            SetSettingsLanguage("");
+            Lang.SaveSelectedLocale();
+            languageSettingsDirty = !Lang.IsSelectedLocaleSaved;
+        },
     };
 
     internal static SettingsTab _voip_setting_tab = new SettingsTab {
@@ -60,7 +71,73 @@ public static partial class UIMainMenu {
         _chat_setting_tab,
         _voip_setting_tab,
         _gui_setting_tab,
+        _language_setting_tab,
     };
+
+    private static bool languageSettingsDirty = true;
+
+    private static void SetSettingsLanguage(string locale) {
+        Lang.SetSelectedLocale(locale);
+        languageSettingsDirty = !Lang.IsSelectedLocaleSaved;
+        GUILayout_DropdownMenu.CloseAll();
+
+        // IMGUI 文本在下一帧重绘时自动更新，主菜单的 TMP 入口按钮需显式刷新
+        if (UIManager.MP_MENU_BUTTON != null) {
+            TextMeshProUGUI text = UIManager.MP_MENU_BUTTON.GetComponentInChildren<TextMeshProUGUI>();
+            if (text != null) {
+                text.text = Lang.Get(IsOpen() ? "mainmenu_mainbutton_close" : "mainmenu_mainbutton");
+            }
+        }
+    }
+
+    private static void _GUI___SettingsLanguage(Rect r) {
+        string[] locales = Lang.AvailableLocales;
+        string[] choices = new string[locales.Length + 1];
+        choices[0] = Lang.Get("mmst_language_follow_game");
+        for (int i = 0; i < locales.Length; i++) {
+            choices[i + 1] = Lang.GetLocaleDisplayName(locales[i]);
+        }
+
+        int selected = Array.IndexOf(locales, Lang.SelectedLocale) + 1;
+        float labelWidth = r.width * SettingLabelWidthRatio;
+        float fieldSpacing = Mathf.Max(GUI.skin.label.margin.right, GUI.skin.button.margin.left);
+        float dropdownWidth = Mathf.Max(1f, r.width - labelWidth - fieldSpacing);
+        float contentWidth = Mathf.Max(1f, r.width - 8f * GetMenuUIScale());
+
+        GUI.skin.label.alignment = TextAnchor.MiddleRight;
+        GUILayout.BeginHorizontal(GUILayout.Width(r.width), GUILayout.ExpandWidth(false));
+        {
+            GUILayout.Label(Lang.Get("mmst_language"), GUILayout.Width(labelWidth));
+            int choice = GUILayout_DropdownMenu.Dropdown(selected, choices, GUILayout.Width(dropdownWidth), GUILayout.ExpandWidth(false));
+            if (choice != selected) {
+                SetSettingsLanguage(choice == 0 ? "" : locales[choice - 1]);
+            }
+        }
+        GUILayout.EndHorizontal();
+
+        bool wordWrap = GUI.skin.label.wordWrap;
+        TextAnchor alignment = GUI.skin.label.alignment;
+        GUI.skin.label.alignment = TextAnchor.UpperLeft;
+        GUI.skin.label.wordWrap = true;
+        GUILayout.Space(10f * GetMenuUIScale());
+
+        // IMGUI 自动换行标签必须显式指定高度，否则多行中文说明会被裁切
+        GUIStyle descriptionStyle = new GUIStyle(GUI.skin.label) {
+            wordWrap = true,
+            alignment = TextAnchor.UpperLeft,
+        };
+        GUIContent descriptionContent = FixGuiContent.Content(Lang.Get("mmst_language_desc"), 7001);
+        float descriptionHeight = Mathf.Max(1f, descriptionStyle.CalcHeight(descriptionContent, contentWidth));
+        GUILayout.Label(descriptionContent, descriptionStyle, GUILayout.Width(contentWidth), GUILayout.Height(descriptionHeight));
+
+        GUI.skin.label.alignment = TextAnchor.MiddleRight;
+        GUILayout.Label(
+            Lang.Get(languageSettingsDirty ? "mmst_language_unsaved" : "mmst_language_saved"),
+            GUILayout.Width(contentWidth),
+            GUILayout.ExpandWidth(false));
+        GUI.skin.label.wordWrap = wordWrap;
+        GUI.skin.label.alignment = alignment;
+    }
 
     /// <summary>当前激活的外部模组设置分页（为 null 时表示当前展示内置 <see cref="cur_settings_tab"/>）。</summary>
     private static TogetherPanelApi.ExternalSettingsTab _activeExternalSettingsTab = null;
@@ -77,9 +154,7 @@ public static partial class UIMainMenu {
 
     internal static Dictionary<Type, List<FieldInfo>> _known_settings = new();
 
-    private static Vector2 _ABOUTMENUSCROLL = Vector2.zero;
     private static Vector2 _SETTINGSMENUSCROLL = Vector2.zero;
-    private static string _lastCopiedLink = "";
     private static string _lastDiagnosticReportNotice = "";
 
     private static string SafeGetExternalTabTitle(TogetherPanelApi.ExternalSettingsTab tab) {
@@ -286,6 +361,8 @@ public static partial class UIMainMenu {
             DoTooltipOnLastGUIRect("mmst_resettodefault_desc");
 
             if (GUILayout.Button(Lang.Get("mmst_apply"))) {
+                Lang.SaveSelectedLocale();
+                languageSettingsDirty = !Lang.IsSelectedLocaleSaved;
                 SettingsJsonThing.json.Save();
                 Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
             }
@@ -568,136 +645,5 @@ public static partial class UIMainMenu {
             }
         }
         return fields;
-    }
-
-    private static void _GUI_RenderAboutMenu(Rect r) {
-        _ABOUTMENUSCROLL = GUILayout.BeginScrollView(_ABOUTMENUSCROLL);
-        int ogFontSize = GUI.skin.label.fontSize;
-        TextAnchor ogAlign = GUI.skin.label.alignment;
-        GUI.skin.label.wordWrap = false;
-
-        try {
-            GUILayout.Space(10f * GetMenuUIScale());
-
-            _GUI__AboutMenuLinkButton(Lang.Get("mmta_og_download"), Constants.OG_DOWNLOAD_URL, r);
-            _GUI__AboutMenuLinkButton(Lang.Get("mmta_discord"), Constants.OG_MOD_DISCORD_URL, r);
-
-            GUI.skin.label.alignment = TextAnchor.UpperCenter;
-            GUILayout.Label("");
-            UIBullshit._GUI_BiggerLabel(Lang.Get("mmta_credits"), 1.2f);
-
-            try {
-                _GUI__ABOUTMENU_FULL_CREDITS(r);
-            } catch (Exception ex) {
-                ModLog.Exception(LogDomain.UI, "UIMainMenu._GUI__ABOUTMENU_FULL_CREDITS", ex);
-            }
-
-            GUILayout.Label("");
-            UIBullshit._GUI_BiggerLabel(Lang.Get("mmta_libraries"), 1.2f);
-
-            _GUI__AboutMenuLinkButton("LiteNetLib", "https://github.com/RevenantX/LiteNetLib", r);
-            _GUI__AboutMenuLinkButton("LiteEntitySystem", "https://github.com/RevenantX/LiteEntitySystem", r);
-            _GUI__AboutMenuLinkButton("Steamworks.NET", "https://github.com/rlabrecque/Steamworks.NET", r);
-            _GUI__AboutMenuLinkButton("OpusSharp", "https://github.com/AvionBlock/OpusSharp", r);
-            _GUI__AboutMenuLinkButton("BepInEx", "https://github.com/BepInEx/BepInEx", r);
-
-            GUILayout.Label("");
-        } finally {
-            GUI.skin.label.fontSize = ogFontSize;
-            GUI.skin.label.alignment = ogAlign;
-            GUILayout.EndScrollView();
-        }
-    }
-
-    private static void _GUI__AboutMenuLinkButton(in string name, in string link, in Rect r) {
-        GUI.skin.label.alignment = TextAnchor.MiddleRight;
-        GUILayout.BeginHorizontal();
-        {
-            GUILayout.Label(name, GUILayout.Width(r.width * 0.5f));
-            if (GUILayout.Button(Lang.Get("mmta_link_open"))) {
-                Application.OpenURL(link);
-                Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
-            }
-            if (UIBullshit.CheckCursorOverlap(GUIUtility.GUIToScreenRect(GUILayoutUtility.GetLastRect()))) {
-                UIBullshit._GUI_SetTooltip("", link);
-            }
-            if (GUILayout.Button(Lang.Get("mmta_link_copy"))) {
-                GUIUtility.systemCopyBuffer = link;
-                _lastCopiedLink = link;
-                Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
-            }
-            if (_lastCopiedLink == link) {
-                GUILayout.Label(Lang.Get("mmta_link_copied"));
-            }
-            GUILayout.FlexibleSpace();
-        }
-        GUILayout.EndHorizontal();
-    }
-
-    internal static (Texture2D, string)[] Credits = new (Texture2D, string)[] {
-        (null, "Creature - MP Mod Developer"),
-        (null, "JyanSei - Optimization assistance"),
-        (null, "dannad - Auto-updater module, Installer tool, C:T ds Staff"),
-        (null, "Gary the cat - playtester, Bug report module, past servers, C:T ds Staff"),
-        (null, "Todd - external mod \"ChangeSkin\", C:T ds Staff"),
-        (null, "ItsVoidSK - playtester, some sprites"),
-        (null, "dawn - TimeManipulation patch"),
-        (null, "VtLoader - Bug fixes"),
-        (null, "Jilu-tin - playtester"),
-        (null, "NyaruQwQ - playtester"),
-        (null, "X0men0X - playtester"),
-        (null, "[Cider] - playtester"),
-        (null, "avr - playtester"),
-        (null, "gordocats - self-heal sprite"),
-        (null, "notamoron - playtester"),
-        (null, "Devactor - playtester"),
-        (null, "Dictator - playtester"),
-        (null, "Мрак 2.0 - playtester"),
-        (null, "Dmonya - playtester"),
-        (null, "Shiro - playtester"),
-        (null, "Charu - playtester"),
-        (null, "kipish - playtester"),
-        (null, "Zero Ares IV - Supporter"),
-        (null, "EthanTheProtogen - Supporter"),
-        (null, "RoyMartini - Supporter"),
-        (null, "Jazun - Supporter"),
-        (null, "Alexx__ - Supporter"),
-        (null, "vega - Supporter"),
-        (null, "Zmechol1337 - Supporter"),
-        (null, "plasterjello - Supporter"),
-        (null, "Doctor Callico - Supporter"),
-        (null, "vivikat - Supporter"),
-        (null, "Ariyah - Supporter"),
-        (null, "therealbudget - Supporter"),
-        (null, "_stuck_ - Supporter"),
-        (null, "ShaoAZ - Supporter"),
-        (null, "JameisonAus - Supporter"),
-        (null, "Kidi - Supporter"),
-        (null, "BluBerryToaster - Supporter"),
-        (null, "Katomou - Supporter"),
-        (null, "Nemean_Lion732 - Supporter"),
-        (null, "Locko2265 - Supporter"),
-        (null, "Trenchburner - Supporter"),
-        (null, "TheBoathead - Supporter"),
-        (null, "Diesel - Supporter"),
-        (null, "Mitirich - Supporter"),
-        (null, "Krokosha666 - OG MP Mod Developer, Retired"),
-        (null, "Orsoniks - Developer of Casualties: Unknown"),
-        (null, "...and the rest of bug reporters, suggestions and regular players"),
-    };
-
-    private static void _GUI__ABOUTMENU_FULL_CREDITS(Rect r) {
-        foreach ((Texture2D icon, string text) in Credits) {
-            GUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            Vector2 textSize = GUI.skin.label.CalcSize(FixGuiContent.Content(text, 23));
-            if (icon != null) {
-                GUILayout.Label(icon, GUILayout.Width(textSize.y), GUILayout.Height(textSize.y));
-                GUILayout.Space(textSize.y * 0.1f);
-            }
-            GUILayout.Label(text);
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
-        }
     }
 }

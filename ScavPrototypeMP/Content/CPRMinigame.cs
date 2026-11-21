@@ -185,21 +185,30 @@ public partial class CPRHandler : MonoBehaviour {
 
     public static bool PlayerIsPerformingCPR(ScavPlayer plr, out NetBody targetNb) {
         targetNb = null;
-        if (!plr.IsInMinigame) return false;
+        if (!Net.IsRunning || plr == null || plr.body == null || !plr.IsInMinigame || plr.minigame_targetobject == null) {
+            return false;
+        }
         Type t = plr.MinigameType;
         bool hasTarget = plr.minigame_targetobject.TryGetNetBody(out targetNb);
-        return hasTarget && (t == typeof(CPRMinigame) || (t == typeof(AEDMinigame) && targetNb.body != plr.body));
+        return hasTarget && targetNb != null && (t == typeof(CPRMinigame) || (t == typeof(AEDMinigame) && targetNb.body != plr.body));
     }
 
     public static bool PlayerIsPerformingCPR(ScavPlayer plr) {
-        if (!plr.IsInMinigame) return false;
+        if (!Net.IsRunning || plr == null || plr.body == null || !plr.IsInMinigame || plr.minigame_targetobject == null) return false;
         Type t = plr.MinigameType;
         return t == typeof(CPRMinigame) || (t == typeof(AEDMinigame) && (!plr.minigame_targetobject.TryGetPlayer(out ScavPlayer p) || p != plr));
     }
 
     public static bool IsCPRBeingPerformedOnThisBody(Body b, out ScavPlayer who) {
+        if (!Net.IsRunning || b == null || ScavPlayer.AllLivingPlayers == null) {
+            who = null;
+            return false;
+        }
         foreach (ScavPlayer plr in ScavPlayer.AllLivingPlayers) {
-            if (plr.body.conscious && PlayerIsPerformingCPR(plr) && plr.minigame_targetobject.TryGetNetBody(out NetBody nb) && nb.body == b) {
+            if (plr == null || plr.body == null || !plr.body.conscious) {
+                continue;
+            }
+            if (PlayerIsPerformingCPR(plr) && plr.minigame_targetobject.TryGetNetBody(out NetBody nb) && nb != null && nb.body == b) {
                 who = plr;
                 return true;
             }

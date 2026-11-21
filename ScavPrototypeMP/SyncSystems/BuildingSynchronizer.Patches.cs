@@ -41,6 +41,11 @@ public static class BuildingEntity_Update_MultiplayerPatch {
             PlayDeathOnce(__instance);
             return false;
         }
+        // 联机模式下在 Prefix 直接接管刚体休眠状态：若落入原版 Update，房主视野外区块渲染关闭会先置 Static 清零下落速度，导致远端掉落物卡在空中
+        if (Net.IsRunning && __instance != null && __instance.TryGetComponent(out Rigidbody2D rb) && !__instance.ignoreBodyOptimize) {
+            BuildingOptimization(rb);
+            return false;
+        }
         return true;
     }
 
@@ -89,19 +94,21 @@ public static class BuildingEntity_Update_MultiplayerPatch {
             return;
         if (__instance != null)
             ChunkSleep.Watch(__instance);
-
-        if (__instance.TryGetComponent(out Rigidbody2D rb) && !__instance.ignoreBodyOptimize) {
-            BuildingOptimization(rb);
-        }
     }
 
     static void BuildingOptimization(Rigidbody2D rb) {
         if (!WorldGeneration.world.worldExists || !(Time.timeScale <= 5f)) {
-            rb.bodyType = RigidbodyType2D.Static;
+            if (rb.bodyType != RigidbodyType2D.Static)
+                rb.bodyType = RigidbodyType2D.Static;
             return;
         }
         bool inSimRange = SharedMain.WorldInSimRange(rb.position);
-        rb.bodyType = inSimRange ? RigidbodyType2D.Dynamic : RigidbodyType2D.Static;
+        RigidbodyType2D want = inSimRange ? RigidbodyType2D.Dynamic : RigidbodyType2D.Static;
+        if (rb.bodyType != want)
+            rb.bodyType = want;
+        // 曾进入 Static 帧的刚体可能残留 simulated=false，恢复 Dynamic 时需同步唤醒物理模拟以保证正常自由落体
+        if (inSimRange && !rb.simulated)
+            rb.simulated = true;
     }
 
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
@@ -213,9 +220,8 @@ public static class BuildingEntity_Start_MultiplayerPatch {
         if (!Net.IsRunning)
             return;
 
-        if (__instance.GetComponent<Heater>()) {
-            __instance.GetOrAddComponent<HeaterMultiplayerRewrite>();
-        } else {
+        // 结构空调位于建筑子层级而非根节点，递归遍历所有子节点挂载 HeaterMultiplayerRewrite
+        if (!AttachHeaterRewrites(__instance)) {
             __instance.StartCoroutine(AttachHeaterRewriteNextFrame(__instance));
         }
 
@@ -266,13 +272,24 @@ public static class BuildingEntity_Start_MultiplayerPatch {
         }
     }
 
+    static bool AttachHeaterRewrites(BuildingEntity building) {
+        if (building == null)
+            return false;
+        Heater[] heaters = building.GetComponentsInChildren<Heater>(true);
+        bool any = false;
+        for (int i = 0; i < heaters.Length; i++) {
+            Heater heater = heaters[i];
+            if (heater == null)
+                continue;
+            any = true;
+            heater.GetOrAddComponent<HeaterMultiplayerRewrite>();
+        }
+        return any;
+    }
+
     static IEnumerator AttachHeaterRewriteNextFrame(BuildingEntity building) {
         yield return null;
-        if (building == null || building.gameObject == null)
-            yield break;
-        if (building.GetComponent<Heater>() != null) {
-            building.GetOrAddComponent<HeaterMultiplayerRewrite>();
-        }
+        AttachHeaterRewrites(building);
     }
 }
 
@@ -471,3 +488,66 @@ internal class ScavMPBuildingSynchronizer : CasualtiesTogetherSingleton {
         }
     }
 }
+
+// 标记关键建筑在全体玩家远离后仍保留于网络快照中，确保中途加入的客机也能收到
+internal sealed class KeepForJoiners : MonoBehaviour {
+}
+
+#if FULLGAME
+internal static class LayerBuildingStream {
+    internal static void HostRegister() {
+        if (!Net.IsRunning || !Net.IsServer)
+            return;
+        WorldGeneration world = WorldGeneration.world;
+        if (world == null || !world.worldExists)
+            return;
+
+        CeilingTurret[] guns = Object.FindObjectsOfType<CeilingTurret>(true);
+        for (int i = 0; i < guns.Length; i++) {
+            if (guns[i] == null)
+                continue;
+            BuildingEntity gunBuild = guns[i].GetComponent<BuildingEntity>();
+            if (gunBuild != null && string.IsNullOrEmpty(gunBuild.id))
+                gunBuild.id = "ceilingturret";
+            Try(gunBuild, true);
+        }
+
+        BloodSuckerScript[] dens = Object.FindObjectsOfType<BloodSuckerScript>(true);
+        for (int i = 0; i < dens.Length; i++) {
+            BuildingEntity den = BuildingOf(dens[i]);
+            if (den != null && string.IsNullOrEmpty(den.id))
+                den.id = "bloodsuckerden";
+            Try(den, true);
+        }
+
+        BlueHeart[] hearts = Object.FindObjectsOfType<BlueHeart>(true);
+        for (int i = 0; i < hearts.Length; i++)
+            Try(BuildingOf(hearts[i]), false);
+    }
+
+    static BuildingEntity BuildingOf(Component part) {
+        if (part == null)
+            return null;
+        BuildingEntity build = part.GetComponent<BuildingEntity>();
+        if (build == null)
+            build = part.GetComponentInParent<BuildingEntity>();
+        return build;
+    }
+
+    static void Try(BuildingEntity build, bool nearOnly) {
+        if (build == null || build.gameObject == null)
+            return;
+        if (string.IsNullOrEmpty(build.id))
+            return;
+        if (NetObjectRegistry.ObjectShouldNotBeSynced(build.gameObject))
+            return;
+        if (!nearOnly)
+            build.gameObject.GetOrAddComponent<KeepForJoiners>();
+        if (NetObjectRegistry.IsRegistered(build.gameObject))
+            return;
+        if (nearOnly && !SharedMain.WorldInSimRange(build.transform.position))
+            return;
+        NetObjectRegistry.NewGO(build.gameObject);
+    }
+}
+#endif

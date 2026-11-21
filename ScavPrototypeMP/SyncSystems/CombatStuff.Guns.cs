@@ -509,6 +509,16 @@ public static class GunScript_Fire_MultiplayerPatch {
     public static Vector2 RollVerticalSpread(GunScript gun) => GunCombatSync.RollVerticalSpread(gun);
 
     public static void Prefix(GunScript __instance, ref GunScript __state) {
+        // 枪械刚从休眠容器激活、同帧网络生成或未执行 Start() 即收到射击重放进入 Fire() 时，原版直接解引用私有缓存字段 it/render 会抛 NRE；常规帧仅两次指针判空开销可忽略
+        if (__instance != null) {
+            if (__instance.it == null) {
+                __instance.it = __instance.GetComponent<Item>();
+            }
+            if (__instance.render == null) {
+                __instance.render = __instance.GetComponent<SpriteRenderer>();
+            }
+        }
+
         __state = GunScript_Update_MultiplayerPatch.current_executing_gun;
         if (!Net.IsRunning) {
             return;
@@ -575,6 +585,16 @@ public static class GunScript_Update_MultiplayerPatch {
     public static GunScript current_executing_gun = null;
 
     static void Prefix(GunScript __instance) {
+        // 防御休眠背包切出或同帧实例化后尚未跑完 Start() 即进入首轮 Update() 解引用 it/render 抛出 NRE（单机与联机统一防护）
+        if (__instance != null) {
+            if (__instance.it == null) {
+                __instance.it = __instance.GetComponent<Item>();
+            }
+            if (__instance.render == null) {
+                __instance.render = __instance.GetComponent<SpriteRenderer>();
+            }
+        }
+
         if (!Net.IsRunning) {
             return;
         }

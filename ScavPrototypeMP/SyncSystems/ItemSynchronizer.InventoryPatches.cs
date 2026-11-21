@@ -430,7 +430,8 @@ public static class Body_CombineItems_MultiplayerPatch {
         if (!combinerBody.CanCombine(it1, it2))
             return true;
         if ((bool)it1.GetComponent<GunScript>() && (bool)it2.GetComponent<AmmoScript>()) {
-            it1.GetComponent<GunScript>().LoadMag(it2.GetComponent<AmmoScript>());
+            // 原版 GunScript.LoadMag 硬编码检查 PlayerCamera.main.body.charType == 1，服务端代执行时会误读房主物种导致 Milky 客户端无法整盒装填霰弹枪
+            LoadMag(combinerBody, it1.GetComponent<GunScript>(), it2.GetComponent<AmmoScript>());
             return true;
         }
         if ((bool)it1.GetComponent<AmmoScript>() && (bool)it2.GetComponent<AmmoScript>()) {
@@ -452,6 +453,37 @@ public static class Body_CombineItems_MultiplayerPatch {
             cont.UnloadItem(it1);
         }
         return true;
+    }
+
+    // 对齐原版 GunScript.LoadMag 全部装填分支，但将 Milky 直装判定绑定到实际操作者 who 而非本地相机角色
+    static void LoadMag(Body who, GunScript gun, AmmoScript ammo) {
+        if (gun == null || ammo == null || ammo.ammoType != gun.ammoType) {
+            return;
+        }
+        if (gun.racked && gun.roundInChamber == GunScript.RoundInChamber.None && ammo.itemType == AmmoScript.AmmoItemType.Round) {
+            gun.roundInChamber = GunScript.RoundInChamber.Round;
+            Sound.Play("gunloadshell", gun.transform.position);
+            UnityEngine.Object.Destroy(ammo.gameObject);
+        } else if (!gun.hasMag && gun.feedType == GunScript.FeedType.Mag && ammo.itemType == AmmoScript.AmmoItemType.Magazine) {
+            gun.hasMag = true;
+            gun.roundsInMag = ammo.rounds;
+            Sound.Play("gunloadmag", gun.transform.position);
+            UnityEngine.Object.Destroy(ammo.gameObject);
+        } else if (gun.feedType == GunScript.FeedType.Direct && ammo.itemType == AmmoScript.AmmoItemType.Round && gun.roundsInMag < gun.magCapacity) {
+            gun.roundsInMag++;
+            Sound.Play("gunloadshell", gun.transform.position);
+            UnityEngine.Object.Destroy(ammo.gameObject);
+        } else if (gun.feedType == GunScript.FeedType.Direct && ammo.itemType == AmmoScript.AmmoItemType.Magazine && who != null && who.charType == 1 && ammo.rounds > 0) {
+            if (gun.racked && gun.roundInChamber == GunScript.RoundInChamber.None) {
+                gun.roundInChamber = GunScript.RoundInChamber.Round;
+                ammo.rounds--;
+                Sound.Play("gunloadshell", gun.transform.position);
+            } else if (gun.roundsInMag < gun.magCapacity) {
+                gun.roundsInMag++;
+                ammo.rounds--;
+                Sound.Play("gunloadshell", gun.transform.position);
+            }
+        }
     }
 
     public static bool DoTheCombineAnnouncement(bool isFluid, float ml, Body body, Item it1, Item it2) {

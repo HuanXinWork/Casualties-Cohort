@@ -185,6 +185,10 @@ public static partial class UIMainMenu {
                     Rect crossRect = GUILayoutUtility.GetLastRect().ShrinkBorder(-1f * GetMenuUIScale());
                     GUI.DrawTexture(crossRect, CoopModAssets.cross.texture, ScaleMode.StretchToFill, true, 1f, Color.red, 0f, 0f);
                 }
+            } else if (plr.body != null && !plr.body.alive && Multiplayer.rules.TrackPlayerDeaths) {
+                GUILayoutUtility.GetRect(GUIContent.none, GUI.skin.label, GUILayout.Width(textSize.y), GUILayout.Height(textSize.y));
+                Rect crossRect = GUILayoutUtility.GetLastRect().ShrinkBorder(-1f * GetMenuUIScale());
+                GUI.DrawTexture(crossRect, CoopModAssets.cross.texture, ScaleMode.StretchToFill, true, 1f, Color.red, 0f, 0f);
             }
 
             if (Voicechat.VCRULE_enabled && plr.vc_output != null && CoopModAssets.voicechaticon != null) {
@@ -242,6 +246,7 @@ public static partial class UIMainMenu {
             GUI.skin.label.alignment = TextAnchor.UpperLeft;
 
             _GUI__PanelInfo();
+            HostTransferUI.DrawLobbyAction();
 
             bool buttonsUsable = Util.IsInWorld() && !IsOpen();
             if (buttonsUsable) {

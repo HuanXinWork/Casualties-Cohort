@@ -7,11 +7,11 @@ namespace Together.UI.TeammateList;
 /// </summary>
 [HarmonyPatch(typeof(NetBody), nameof(NetBody.SetUnchipped))]
 internal static class ChipCachePatch {
-    private static void Postfix(NetBody __instance, bool unchipped) {
+    private static void Postfix(NetBody __instance, bool unchippedVal) {
         if (__instance == null) {
             return;
         }
-        TeammateListHost.NoteUnchipped(__instance.plr, unchipped);
+        TeammateListHost.NoteUnchipped(__instance.plr, unchippedVal);
     }
 }
 

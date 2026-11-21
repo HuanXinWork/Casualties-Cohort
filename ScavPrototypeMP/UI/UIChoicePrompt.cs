@@ -326,28 +326,31 @@ public class VoteSystem : CasualtiesTogetherSingleton {
                 return;
             }
 
-            string callerName = plr != null ? plr.playerName : "SERVER";
+            Lang.MessageArgument callerName = Lang.NestedMsg(Lang.MarkMsgAsLocaleKey("vote_caller_server"));
+            if (plr != null) {
+                callerName = plr.playerName;
+            }
             string actionType = argv[1];
             string targetName = argv[2];
 
             if (actionType == "kick") {
                 Con.PerformActionOnPlayersByName(targetName, oplr => {
                     if (!oplr.IsLocal && Server_ActiveVote == null) {
-                        Chat.Server_ChatAnnouncement($"{callerName} called a vote kick for {oplr.playerName}");
+                        Chat.Server_ChatAnnouncement(Lang.FormatMsg("vote_kick_announce", callerName, oplr.playerName));
                         Server_VoteKick(oplr, plr);
                     }
                 }, false, plr, false, true);
             } else if (actionType == "mutevc") {
                 Con.PerformActionOnPlayersByName(targetName, oplr => {
                     if (!oplr.IsLocal && Server_ActiveVote == null) {
-                        Chat.Server_ChatAnnouncement($"{callerName} called a vote mute vc for {oplr.playerName}");
+                        Chat.Server_ChatAnnouncement(Lang.FormatMsg("vote_mute_vc_announce", callerName, oplr.playerName));
                         Server_VoteMuteVC(oplr, plr);
                     }
                 }, false, plr, false, true);
             } else if (actionType == "mutetc") {
                 Con.PerformActionOnPlayersByName(targetName, oplr => {
                     if (!oplr.IsLocal && Server_ActiveVote == null) {
-                        Chat.Server_ChatAnnouncement($"{callerName} called a vote mute tc for {oplr.playerName}");
+                        Chat.Server_ChatAnnouncement(Lang.FormatMsg("vote_mute_tc_announce", callerName, oplr.playerName));
                         Server_VoteMuteTC(oplr, plr);
                     }
                 }, false, plr, false, true);
@@ -356,29 +359,29 @@ public class VoteSystem : CasualtiesTogetherSingleton {
     }
 
     public static void Server_VoteKick(ScavPlayer plr, ScavPlayer who_called_the_vote = null) {
-        string txt = $"Kick {plr.playerName}";
-        Server_AnnounceVote("Vote Kick", txt, 10, (votedYes, votedNo, votedIgnore) => {
+        string txt = Lang.FormatMsg("vote_kick_body", plr.playerName);
+        Server_AnnounceVote(Lang.MarkMsgAsLocaleKey("vote_kick_title"), txt, 10, (votedYes, votedNo, votedIgnore) => {
             votedIgnore.Remove(plr);
             float total = votedYes.Count + votedNo.Count + votedIgnore.Count;
             if (total > 0) {
                 float perc = votedYes.Count / total;
                 string percentStr = Mathf.RoundToInt(perc * 100f).ToString();
-                Chat.Server_ChatAnnouncement($"Vote kick result: {percentStr}%");
+                Chat.Server_ChatAnnouncement(Lang.FormatMsg("vote_kick_result", percentStr));
                 if (perc > 0.5f && plr != null) {
-                    plr.Server_Kick($"Vote kicked. {percentStr}%");
+                    plr.Server_Kick(Lang.FormatMsg("vote_kick_kicked_reason", percentStr));
                 }
             }
         });
     }
 
     public static void Server_VoteMuteVC(ScavPlayer plr, ScavPlayer who_called_the_vote = null) {
-        string txt = $"Mute {plr.playerName}";
-        Server_AnnounceVote("Vote Mute VC", txt, 10, (votedYes, votedNo, votedIgnore) => {
+        string txt = Lang.FormatMsg("vote_mute_vc_body", plr.playerName);
+        Server_AnnounceVote(Lang.MarkMsgAsLocaleKey("vote_mute_vc_title"), txt, 10, (votedYes, votedNo, votedIgnore) => {
             votedIgnore.Remove(plr);
             float total = votedYes.Count + votedNo.Count + votedIgnore.Count;
             if (total > 0) {
                 float perc = votedYes.Count / total;
-                Chat.Server_ChatAnnouncement($"Vote mute vc result: {Mathf.RoundToInt(perc * 100f)}%");
+                Chat.Server_ChatAnnouncement(Lang.FormatMsg("vote_mute_vc_result", Mathf.RoundToInt(perc * 100f).ToString()));
                 if (perc > 0.5f && plr != null) {
                     plr.server_mute_vc = true;
                 }
@@ -387,13 +390,13 @@ public class VoteSystem : CasualtiesTogetherSingleton {
     }
 
     public static void Server_VoteMuteTC(ScavPlayer plr, ScavPlayer who_called_the_vote = null) {
-        string txt = $"Mute {plr.playerName}";
-        Server_AnnounceVote("Vote Mute TC", txt, 10, (votedYes, votedNo, votedIgnore) => {
+        string txt = Lang.FormatMsg("vote_mute_tc_body", plr.playerName);
+        Server_AnnounceVote(Lang.MarkMsgAsLocaleKey("vote_mute_tc_title"), txt, 10, (votedYes, votedNo, votedIgnore) => {
             votedIgnore.Remove(plr);
             float total = votedYes.Count + votedNo.Count + votedIgnore.Count;
             if (total > 0) {
                 float perc = votedYes.Count / total;
-                Chat.Server_ChatAnnouncement($"Vote mute tc result: {Mathf.RoundToInt(perc * 100f)}%");
+                Chat.Server_ChatAnnouncement(Lang.FormatMsg("vote_mute_tc_result", Mathf.RoundToInt(perc * 100f).ToString()));
                 if (perc > 0.5f && plr != null) {
                     plr.server_mute_tc = true;
                 }

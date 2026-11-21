@@ -14,8 +14,10 @@ static class SlotHold
 	}
 
 	const float Seconds = 0.2f;
+	const int ExpireScanAt = 4;
 
 	static readonly System.Collections.Generic.Dictionary<long, Row> Rows = new System.Collections.Generic.Dictionary<long, Row>();
+	static readonly System.Collections.Generic.List<long> Expired = new System.Collections.Generic.List<long>();
 
 	internal static void Keep(Body body, int slot, Item item)
 	{
@@ -23,11 +25,29 @@ static class SlotHold
 			return;
 		if (slot < 0 || slot >= body.slots.Length)
 			return;
+		DropExpired();
 		Rows[Key(body, slot)] = new Row
 		{
 			Item = item.GetInstanceID(),
 			Until = Time.realtimeSinceStartup + Seconds,
 		};
+	}
+
+	// 已销毁 Body 的槽位键后续不会再被 Live 读取，超过阈值时主动清理过期项防残留增长
+	static void DropExpired()
+	{
+		if (Rows.Count < ExpireScanAt)
+			return;
+		float now = Time.realtimeSinceStartup;
+		Expired.Clear();
+		foreach (var pair in Rows)
+		{
+			if (pair.Value.Until < now)
+				Expired.Add(pair.Key);
+		}
+		for (int i = 0; i < Expired.Count; i++)
+			Rows.Remove(Expired[i]);
+		Expired.Clear();
 	}
 
 	internal static void Release(Body body, Item item)

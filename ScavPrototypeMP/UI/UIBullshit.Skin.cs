@@ -145,21 +145,23 @@ namespace Together {
             return result;
         }
 
+        // 旧缩放/染色纹理在 GUISkin 重建完成前仍被样式引用，延迟到重建落地后再统一销毁
+        private static readonly List<Texture2D> retired_textures = new();
+
         public static void ResizeGUITextures() {
-            // 释放动态生成的缩放与变暗 Texture2D，防止频繁切换分辨率/UI 缩放导致非托管显存泄漏
             foreach (KeyValuePair<Texture2D, Dictionary<Vector2, Texture2D>> kvp in cached_modified_textures) {
                 if (kvp.Value == null) {
                     continue;
                 }
                 foreach (KeyValuePair<Vector2, Texture2D> inner in kvp.Value) {
                     if (inner.Value != null && !ReferenceEquals(inner.Value, kvp.Key)) {
-                        Destroy(inner.Value);
+                        retired_textures.Add(inner.Value);
                     }
                 }
             }
             foreach (KeyValuePair<Texture2D, Texture2D> kvp in cached_scaled_textures) {
                 if (kvp.Value != null && !ReferenceEquals(kvp.Value, kvp.Key)) {
-                    Destroy(kvp.Value);
+                    retired_textures.Add(kvp.Value);
                 }
             }
 
@@ -373,9 +375,19 @@ namespace Together {
                 }
                 GUI.skin = new_skin;
 
-                // 先执行皮肤刷新让 FixSkinSkip.Allow() 观测到 _recalculate_skin 置位，刷新后再清零
-                _GUI_MPUISetSkinValues();
-                _recalculate_skin = false;
+                if (_recalculate_skin) {
+                    // FixSkinSkip 依赖 _recalculate_skin 决定是否执行重建，必须在重建完成后再复位标志并销毁旧纹理
+                    _GUI_MPUISetSkinValues();
+                    _recalculate_skin = false;
+                    foreach (Texture2D retired in retired_textures) {
+                        if (retired != null) {
+                            Destroy(retired);
+                        }
+                    }
+                    retired_textures.Clear();
+                } else {
+                    _GUI_MPUISetSkinValues();
+                }
             } catch (Exception ex) {
                 ModLog.Exception(LogDomain.UI, "UIBullshit._GUI_DoTexturesForMPUserInterface", ex);
             }

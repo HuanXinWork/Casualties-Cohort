@@ -107,20 +107,44 @@ namespace Together {
         }
 
         private bool _RagdollReadIndividualLimb(Limb limb, ref SyncVar<Vector2_4byte_512> syncpos, ref SyncVar<FloatAngle> syncrot, ref SyncVar<Vector2_4byte_200> syncvel, ref SyncVar<short> syncangvel) {
-            Vector2_4byte_512 limb_rb_position = syncpos.InterpolatedValue;
-            if (!limb.dismembered) {
-                if (Net.IsServer && Vector2.SqrMagnitude(limb_rb_position - nb.GetPosition()) >= 100f) {
-#if !RELEASE
-                    log.sus($"{DebugHelp.GetPlayerFullDebugString(nb.body)} something is sus about {DebugHelp.GetGameObjectFullDebugString(limb)} ");
-#endif
-                    return false;
-                }
-                limb.transform.position = limb_rb_position;
-                limb.rb.rotation = syncrot.InterpolatedValue;
-                limb.rb.velocity = syncvel.InterpolatedValue;
-                limb.rb.angularVelocity = Util_MPExtensions.UnquantizeFloatFromShort(syncangvel.InterpolatedValue, _RAGDOLL_ANGVEL_QUANTIZE);
+            if (limb == null || limb.dismembered || limb.rb == null) {
+                return true;
             }
+            // Group3 刚启用时插值器初值为 0，直接读最新快照避免短暂摔倒在插值追近前已结束导致姿态丢失
+            Vector2 at = syncpos.Value;
+            Vector2 root = nb.body.transform.position;
+            if ((at - root).sqrMagnitude > 400f) {
+                return true;
+            }
+            // 远端肢体置为运动学快照受控态，防止本地物理求解器与报文姿态互相拉扯
+            Rigidbody2D rb = limb.rb;
+            if (rb.interpolation != RigidbodyInterpolation2D.None) {
+                rb.interpolation = RigidbodyInterpolation2D.None;
+            }
+            if (!rb.isKinematic) {
+                rb.velocity = Vector2.zero;
+                rb.angularVelocity = 0f;
+                rb.isKinematic = true;
+            }
+            rb.position = at;
+            rb.rotation = syncrot.Value;
             return true;
+        }
+
+        private static void ReleaseRemoteLimbs(Body body) {
+            if (body == null || body.limbs == null) {
+                return;
+            }
+            Limb[] limbs = body.limbs;
+            for (int i = 0; i < limbs.Length; i++) {
+                Limb limb = limbs[i];
+                if (limb != null && limb.rb != null && limb.rb.isKinematic) {
+                    limb.rb.isKinematic = false;
+                }
+            }
+            if (body.rb != null && body.rb.isKinematic) {
+                body.rb.isKinematic = false;
+            }
         }
 
         internal void ReadRagdollData() {
@@ -238,6 +262,7 @@ namespace Together {
                     body.shock = _standing.Value ? 0f : 100f;
                     if (body.standing != _standing.Value) {
                         if (_standing.Value) {
+                            ReleaseRemoteLimbs(body);
                             body.ForceStand();
                         } else {
                             body.Ragdoll();
@@ -264,15 +289,31 @@ namespace Together {
                     }
                 } else {
                     Vector2 raw = _position.Value;
+                    ReleaseRemoteLimbs(nb.body);
                     nb.body.ForceStand();
                     nb.SetBodyPosition(raw);
                     EnemyMoveProbe.Note(this, EnemyMoveProbe.SimOut, raw);
                 }
             }
 
-            readingRagdollData = IsSyncGroupEnabled(SyncGroup.SyncGroup3) && !nb.body.standing && !nb.IsPiggybacking();
+            // 仅客户端应用 SyncGroup3 布娃娃快照（宿主本身负责物理模拟），同时冻结根刚体并暂停 Animator 防止覆盖骨骼姿态
+            readingRagdollData = !Net.IsServer && IsSyncGroupEnabled(SyncGroup.SyncGroup3) && !nb.body.standing && !nb.IsPiggybacking();
             if (readingRagdollData) {
+                Rigidbody2D rootRb = body.rb;
+                if (rootRb != null && !rootRb.isKinematic) {
+                    rootRb.velocity = Vector2.zero;
+                    rootRb.angularVelocity = 0f;
+                    rootRb.interpolation = RigidbodyInterpolation2D.None;
+                    rootRb.isKinematic = true;
+                }
                 ReadRagdollData();
+            }
+            bool animate = !readingRagdollData;
+            if (body.bodyAnimator != null && body.bodyAnimator.enabled != animate) {
+                body.bodyAnimator.enabled = animate;
+            }
+            if (body.armsAnimator != null && body.armsAnimator.enabled != animate) {
+                body.armsAnimator.enabled = animate;
             }
 
             if (!body.IsBodyLocal() && body.sleeping && body.moveDir != Vector2.zero) {

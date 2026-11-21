@@ -29,7 +29,7 @@ namespace Together {
                 }
             }
 
-            // 先为 Retro GamingPix 挂载系统动态 Unicode 回退字体表，使后续 ReplaceMissingCharacters(HasCharacter(..., true)) 原生识别中文/俄文/日韩文而不替换为 '?'
+            // 先为 Retro GamingPix 挂载系统动态 Unicode 回退字体表，使后续 ReplaceMissingCharacters(HasCharacter(..., true, true)) 原生烘焙识别中文/俄文/日韩文而不替换为 '?'
             {
                 if (s_retroGamingFontAsset == null) {
                     IEnumerable<TMP_FontAsset> ggggfd = GameObject.FindObjectsOfType<TextMeshProUGUI>(true).Select(x => x.font);
@@ -254,11 +254,13 @@ namespace Together {
             Net.Server_SendToClients(reliable ? DeliveryMethod.ReliableOrdered : DeliveryMethod.Unreliable, writer, clientIds: playerId);
         }
 
-        public void Server_Kick(string message = "Kicked.") {
+        public void Server_Kick(string message = null) {
             if (Net.TryGetSteamTransport(out TransportSteamworks _) && KnownPersons.IsSteamUserPrivileged(SteamId)) {
                 // kick protection
                 return;
             }
+
+            message ??= Lang.MarkMsgAsLocaleKey("kick_default_reason");
 
             try {
                 if (body != null) {
@@ -268,10 +270,10 @@ namespace Together {
                 ModLog.Exception(LogDomain.Lobby, "ScavPlayer.Server_Kick.DropItems", e);
             }
 
-            string msg = $"Kicked {playerName}";
+            var msg = Lang.FormatMsg("plr_kicked", playerName);
             Chat.Server_ChatAnnouncement(msg);
             try {
-                ServerMain.Server_SendMPLogMessage(msg + ": " + message, false, new knetid[] { playerId });
+                ServerMain.Server_SendMPLogMessage(Lang.FormatMsg("kick_notice", Lang.NestedMsg(msg), Lang.NestedMsg(message)), false, new knetid[] { playerId });
             } catch (Exception e) {
                 log.error(e);
             }

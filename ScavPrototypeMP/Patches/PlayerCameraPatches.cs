@@ -423,12 +423,12 @@ static class PlayerCamera_ToMainMenu_MultiplayerPatch {
 
         if (Net.IsClient) {
             if (!Multiplayer.showMultiplayerMenu) {
-                Multiplayer.DoMultiplayerStatusMessageLog("Disconnecting because local player returned to main menu.");
+                Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("gotomainmenu_local"));
                 Multiplayer._JustDisconnect();
-                Chat.LogMessage(Chat.NAMELABEL_LOCALSYSTEM, "Left the server.");
+                Chat.LogMessage(Chat.NAMELABEL_LOCALSYSTEM, Lang.Get("left_server_local"));
             }
         } else {
-            Multiplayer.DoMultiplayerStatusMessageLog("Announcing GoBackToMainMenu.");
+            Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("gotomainmenu_announce"));
             var writer = Net.CreateWriter(NetmsgId.CLIENT_GoBackToMainMenu);
             writer.Put(0);
             Net.Server_SendToClientsVeryReliable(writer, ServerMain.AllClientIdsExceptHost);

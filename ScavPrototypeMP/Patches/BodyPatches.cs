@@ -374,31 +374,6 @@ public static class Body_TryLastStand_MultiplayerPatch {
     }
 }
 
-/// <summary>
-/// 抑制远端清醒倒地玩家在本地运行完整 <see cref="Body.FixedUpdate"/> 自发拉扯关节（对齐 v5.5.3）。
-/// </summary>
-[HarmonyPatch(typeof(Body), "FixedUpdate")]
-public static class Body_FixedUpdate_RemoteRagdoll {
-    private static bool Prefix(Body __instance) {
-        if (!Net.IsRunning || __instance.standing || !__instance.conscious || __instance.IsBodyLocal()) {
-            return true;
-        }
-        if (!__instance.TryGetNetBody(out var nb) || !nb.IsPlayer) {
-            return true;
-        }
-        if (__instance.rb != null) {
-            __instance.rb.gravityScale = 1f;
-            __instance.lastTimeStepVelocity = __instance.rb.velocity;
-            if ((__instance.grounded || __instance.bodyAffect.wasWater)
-                && __instance.shock < 10f
-                && __instance.rb.velocity.magnitude < __instance.maxSpeed * 0.1f) {
-                __instance.Stand();
-            }
-        }
-        return false;
-    }
-}
-
 internal static class WorkoutNetworkSync {
     internal static void ServerRelayStartExercise(knetid exerciser, Body.WorkoutType type) {
         NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_StartExcerciseRelay);

@@ -1,4 +1,5 @@
 #if FULLGAME
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -134,9 +135,11 @@ internal static class CeilingTurretHostSim {
     }
 
     static readonly Dictionary<int, SentAim> Sent = new Dictionary<int, SentAim>();
+    static int _sentPruneAt = StaleIds.FirstThreshold;
     static CeilingTurret[] _cached;
     static int _cachedFrame = -1;
     static readonly Dictionary<int, MoveSample> _moveSample = new Dictionary<int, MoveSample>();
+    static int _movePruneAt = StaleIds.FirstThreshold;
 
     internal static void Tick(CeilingTurret ct) {
         if (ct == null) {
@@ -236,6 +239,7 @@ internal static class CeilingTurretHostSim {
         if (!aimDue) {
             return;
         }
+        StaleIds.Prune<CeilingTurret, SentAim>(Sent, ref _sentPruneAt);
         Sent[id] = new SentAim {
             Angle = angle,
             Next = Time.time + (fired ? 0.05f : 0.2f),
@@ -283,7 +287,7 @@ internal static class CeilingTurretHostSim {
         if (shotDir.sqrMagnitude < 0.01f) {
             shotDir = Vector2.down;
         }
-        Sound.Play("rifleshot", shotPos, true, false, null, 1f, 1f, false, false);
+        Sound.Play("rifleshot", shotPos, true, false);
         if (WorldGeneration.world != null && WorldGeneration.world.biomeDepth == 11 && PlayerCamera.main != null) {
             PlayerCamera.main.threatMusicTime = 2f;
         }
@@ -437,6 +441,7 @@ internal static class CeilingTurretHostSim {
             return false;
         }
         int id = body.GetInstanceID();
+        StaleIds.Prune<Body, MoveSample>(_moveSample, ref _movePruneAt);
         Vector2 pos = body.transform.position;
         float now = Time.time;
         if (body.grounded && body.moveDir.sqrMagnitude < 0.04f) {
@@ -518,23 +523,22 @@ static class Limb_AttachProsthetic_HealthPush_MultiplayerPatch {
 }
 
 /// <summary>
-/// 单人跑酷教程控制器在联机下应予屏蔽；新版原版已将 <c>MovementCourse.Start</c> 迁移为 <c>TutorialCourse.Sequence</c>，
-/// 此处先通过 <see cref="AccessTools.Method(System.Type,string,System.Type[],System.Type[])"/> 判空，若目标方法不存在则安全跳过挂载，消除启动报错。
+/// 联机大厅下屏蔽单人跑酷教程控制器协程。
+/// Fullgame v1.0.2 已将入口从 <c>Start</c> 迁移为 <see cref="MovementCourse.Sequence"/>；
+/// 拦截返回 <see cref="IEnumerator"/> 的协程方法时必须填充非空空枚举器，防止宿主 <c>StartCoroutine(null)</c> 抛出异常。
 /// </summary>
-[HarmonyPatch]
+[HarmonyPatch(typeof(MovementCourse), nameof(MovementCourse.Sequence))]
 static class MovementCourse_Start_MultiplayerPatch {
-    static MethodBase TargetMethod() {
-        return AccessTools.Method(typeof(MovementCourse), "Start");
+    private static IEnumerator EmptyCoroutine() {
+        yield break;
     }
 
-    static bool Prepare() {
-        bool exists = TargetMethod() != null;
-        if (!exists) {
-            ModLog.Debug(LogDomain.World, "MovementCourse.Start not found in current game build; skipping legacy tutorial patch.");
+    static bool Prefix(ref IEnumerator __result) {
+        if (!Net.IsRunning) {
+            return true;
         }
-        return exists;
+        __result = EmptyCoroutine();
+        return false;
     }
-
-    static bool Prefix() => !Net.IsRunning;
 }
 #endif

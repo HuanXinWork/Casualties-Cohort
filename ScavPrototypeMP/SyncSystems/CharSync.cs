@@ -1,4 +1,5 @@
 using CasualtiesTogetherUtils;
+using HarmonyLib;
 using LiteNetLib.Utils;
 using System.Collections.Generic;
 using Together;
@@ -187,4 +188,25 @@ public partial struct ClientToServer_NetBodySyncPacket : INetSerializeByMemcpy {
 
     }
 
+}
+
+// 远端玩家清醒倒地时跳过原版 FixedUpdate（原版会旋转头部并施加 6000 爬行推力导致观测端肢体乱飞），仅保留重力与起身判定。
+[HarmonyPatch(typeof(Body), "FixedUpdate")]
+public static class Body_FixedUpdate_RemoteRagdoll {
+    static bool Prefix(Body __instance) {
+        if (!Net.IsRunning || __instance.standing || !__instance.conscious || __instance.IsBodyLocal()) {
+            return true;
+        }
+        if (!__instance.TryGetNetBody(out NetBody nb) || !nb.IsPlayer) {
+            return true;
+        }
+        if (__instance.rb != null) {
+            __instance.rb.gravityScale = 1f;
+            __instance.lastTimeStepVelocity = __instance.rb.velocity;
+            if ((__instance.grounded || __instance.bodyAffect.wasWater) && __instance.shock < 10f && __instance.rb.velocity.magnitude < __instance.maxSpeed * 0.1f) {
+                __instance.Stand();
+            }
+        }
+        return false;
+    }
 }

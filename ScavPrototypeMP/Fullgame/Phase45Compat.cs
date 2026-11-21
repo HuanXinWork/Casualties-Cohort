@@ -42,6 +42,23 @@ public static class FullgameWorldCompat {
         return y < (float)(0L - (long)half) + 3.1f;
     }
 
+    // 预留 8 格回退滞后余量，避免玩家恰好踩在出口判定线上时被误判为已离开出口区域
+    public static bool HasLeftLayerExit(Body body) {
+        if (body == null || WorldGeneration.world == null) {
+            return true;
+        }
+        if (IsWwmrLayer()) {
+            return true;
+        }
+        float y = body.transform.position.y;
+        uint half = WorldGeneration.world.halfHeight;
+        const float slack = 8f;
+        if (IsAscentLayer()) {
+            return y < (float)half - 5f - slack;
+        }
+        return y >= (float)(0L - (long)half) + 3.1f + slack;
+    }
+
     public static void WriteWorldExtras(NetDataWriter writer) {
         writer.Put(Physics2D.gravity.y);
         writer.Put(WorldGeneration.world != null && WorldGeneration.world.isMercRun);
@@ -226,8 +243,8 @@ internal sealed class FanClientFollow : MonoBehaviour {
 /// <summary>
 /// 风扇陷阱（<see cref="FanTrap"/>）转速、期望转速与扇叶断裂状态的 <see cref="SyncInfo.specialdata1"/> / <see cref="SyncInfo.specialdata2"/> 编解码及客机推人模拟。
 /// </summary>
-internal static class FanTrapSync {
-    internal static void Write(FanTrap fan, SyncInfo si, bool force = false) {
+public static class FanTrapSync {
+    public static void Write(FanTrap fan, SyncInfo si, bool force = false) {
         if (fan == null || si == null) {
             return;
         }
@@ -281,7 +298,7 @@ internal static class FanTrapSync {
         desired = d / 100f;
     }
 
-    internal static bool Apply(FanTrap fan, byte raw, float packed) {
+    public static bool Apply(FanTrap fan, byte raw, float packed) {
         if (fan == null) {
             return false;
         }
@@ -643,39 +660,16 @@ static class BloodSuckerScript_OnWillRenderObject_HostDrain_MultiplayerPatch {
     }
 }
 
+// 原版仅对相机视野内的本地身体做温度插值，且结构空调等子物体常在房主镜头外；
+// 统一交由 HeaterMultiplayerRewrite 在房主端按半径对全体玩家结算并同步。
 [HarmonyPatch(typeof(Heater), "OnWillRenderObject")]
 static class Heater_OnWillRenderObject_AllBodies_MultiplayerPatch {
     static bool Prefix(Heater __instance) {
         if (!Net.IsRunning || __instance == null) {
             return true;
         }
-        if (!Net.IsServer) {
-            return false;
-        }
-        Traverse tr = Traverse.Create(__instance);
-        float last = tr.Field("lastTime").GetValue<float>();
-        if (Time.time - last <= 0.5f) {
-            return false;
-        }
-        tr.Field("lastTime").SetValue(Time.time);
-        float desired = __instance.desiredTemp;
-        bool heating = desired >= 37f;
-        float reach = __instance.maxDistance;
-        if (reach <= 0f) {
-            return false;
-        }
-        Vector2 pos = __instance.transform.position;
-        foreach (NetBody nb in NetBody.GetBodiesInRadius(pos, reach)) {
-            Body body = nb != null ? nb.body : null;
-            if (body == null) {
-                continue;
-            }
-            bool towards = (heating && body.temperature < desired) || (!heating && body.temperature > desired);
-            if (!towards) {
-                continue;
-            }
-            body.temperature = Mathf.Lerp(body.temperature, desired, __instance.tempLerpStrength);
-            MedicalSync.Server_QueueSendCharacterHealth(nb, true);
+        if (Net.IsServer) {
+            HeaterMultiplayerRewrite.Apply(__instance);
         }
         return false;
     }

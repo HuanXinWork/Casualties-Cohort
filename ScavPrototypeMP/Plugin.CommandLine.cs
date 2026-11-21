@@ -158,7 +158,7 @@ namespace Together {
 
                     arg = args[i];
 
-                    UIMainMenu.USERINPUT_NAME = Multiplayer.SanitizeTextInput(arg);
+                    UIMainMenu.USERINPUT_NAME = Multiplayer.SanitizeUnicodeTextInput(arg);
                     plrname_override = true;
                     log.LogInfo($"CMD: set name to: {UIMainMenu.USERINPUT_NAME}");
                 }

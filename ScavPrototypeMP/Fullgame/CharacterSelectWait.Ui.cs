@@ -86,6 +86,12 @@ public static partial class CharacterSelectWait {
             return;
         }
 
+        // 原版返回按钮可在未经过我们监听的情况下隐藏物种选择页，必须及时中止大厅准备门控以免后续进图漏生成玩家
+        if (Net.IsServer && Waiting && Util.IsInMainMenu() && !IsSpeciesSelectPageVisible(prs)) {
+            AbortLobbyGate();
+            return;
+        }
+
         if (Net.IsServer && !Waiting && IsSpeciesSelectPageVisible(prs)) {
             OpenLobbyGate();
             return;
@@ -390,6 +396,24 @@ public static partial class CharacterSelectWait {
             }
         }
         _readyButtons.Clear();
+    }
+
+    static void ReleaseMenuDim() {
+        WorldMP.ReleaseTitleFade();
+        PreRunScript prs = PreRunScript.instance;
+        if (prs == null) {
+            return;
+        }
+        if (prs.cover != null) {
+            Color c = prs.cover.color;
+            c.a = 0f;
+            prs.cover.color = c;
+            prs.cover.raycastTarget = false;
+        }
+        try {
+            Traverse.Create(prs).Field("startedLoading").SetValue(false);
+        } catch {
+        }
     }
 }
 

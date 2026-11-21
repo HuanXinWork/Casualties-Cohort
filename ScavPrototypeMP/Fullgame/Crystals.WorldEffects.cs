@@ -295,8 +295,91 @@ internal static class CrystalShy_Touched_MultiplayerPatch {
 
 [HarmonyPatch(typeof(CrystalFragile), nameof(CrystalFragile.Touched))]
 internal static class CrystalFragile_Touched_MultiplayerPatch {
-    static bool Prefix(CrystalFragile __instance) {
-        return CrystalMpGates.HostSimOnly(__instance);
+    static readonly HashSet<int> broke = new HashSet<int>();
+    static bool ran;
+
+    static bool Prefix(CrystalFragile __instance, GameObject touched) {
+        ran = false;
+        if (!Net.IsRunning) {
+            return true;
+        }
+        if (__instance == null || __instance.crystal == null || !Breaker(touched)) {
+            return false;
+        }
+        if (Net.IsServer) {
+            if (!broke.Add(__instance.crystal.gameObject.GetInstanceID())) {
+                return false;
+            }
+            if (broke.Count > 256) {
+                broke.Clear();
+            }
+            ran = true;
+            return true;
+        }
+        if (!LocalBreaker(touched)) {
+            return false;
+        }
+        if (NetObjectRegistry.TryGetSyncInfo(__instance.crystal.gameObject, out SyncInfo si) && si != null) {
+            NetDataWriter writer = Multiplayer.CreateNamedWriter(CustomWireCommands.ChannelCustomCommand);
+            writer.Put("fragile_break " + si.syncId.id.ToString());
+            Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
+        }
+        return false;
+    }
+
+    static void Postfix(CrystalFragile __instance) {
+        if (!ran || !Net.IsServer || __instance == null || __instance.crystal == null) {
+            return;
+        }
+        ServerMain.Server_AnnounceSound(__instance.crystal.transform.position, "glass", ServerMain.AllClientIdsExceptHost);
+    }
+
+    static bool Breaker(GameObject touched) {
+        if (touched == null) {
+            return false;
+        }
+        return touched.GetComponent<Item>() != null || touched.GetComponent<Body>() != null;
+    }
+
+    static bool LocalBreaker(GameObject touched) {
+        if (touched == null) {
+            return false;
+        }
+        if (touched.GetComponent<Item>() != null) {
+            return true;
+        }
+        Body body = touched.GetComponent<Body>();
+        return body != null && Util.IsBodyLocal(body);
+    }
+
+    [CTPostInit]
+    static void Init() {
+        ServerMain.ServerCustomCommandsDict["fragile_break"] = (plr, cmd, args) => {
+            if (!Net.IsServer || args == null || args.Length < 2) {
+                return;
+            }
+            if (!ushort.TryParse(args[1], out ushort syncId)) {
+                return;
+            }
+            if (!NetObjectRegistry.TryGetSyncInfo(syncId, out SyncInfo si) || si == null || si.go == null) {
+                return;
+            }
+            if (!si.go.TryGetComponent(out CrystalBehaviour crystal) || crystal.effects == null) {
+                return;
+            }
+            for (int i = 0; i < crystal.effects.Count; i++) {
+                if (crystal.effects[i] is not CrystalFragile) {
+                    continue;
+                }
+                if (!broke.Add(crystal.gameObject.GetInstanceID())) {
+                    return;
+                }
+                Sound.Play("glass", crystal.transform.position);
+                ServerMain.Server_AnnounceSound(crystal.transform.position, "glass", ServerMain.AllClientIdsExceptHost);
+                crystal.build.health = 0f;
+                return;
+            }
+        };
     }
 }
 
@@ -510,6 +593,41 @@ public static class CrystalTemperature_Start_MultiplayerPatch {
     static void Postfix(CrystalTemperature __instance) {
         if (Net.IsRunning && __instance != null && __instance.crystal != null) {
             __instance.crystal.gameObject.GetOrAddComponent<HeaterMultiplayerRewrite>();
+        }
+    }
+}
+
+// 原版 ChunkScript.Update 在瓦片渲染器关闭时提前返回（渲染器仅跟随房主相机），
+// 此处在房主侧对远端玩家所在的活跃区块补跑 CrystalBehaviour.ChunkUpdate，确保败血/滴液/不稳定引信正常结算。
+[HarmonyPatch(typeof(ChunkScript), "Update")]
+static class ChunkScript_Update_CrystalSim_MultiplayerPatch {
+    static void Postfix(ChunkScript __instance) {
+        if (!Net.IsRunning || !Net.IsServer || __instance == null) {
+            return;
+        }
+        if (__instance.renderer != null && __instance.renderer.enabled) {
+            return;
+        }
+        List<ISimEntity> list = __instance.containedEntities;
+        if (list == null || list.Count == 0) {
+            return;
+        }
+        WorldGeneration world = WorldGeneration.world;
+        if (world == null || !world.worldExists || world.generatingWorld) {
+            return;
+        }
+        int size = WorldGeneration.CHUNKSIZE;
+        if (size < 1) {
+            return;
+        }
+        Vector2Int block = new Vector2Int(__instance.pos.x * size + size / 2, __instance.pos.y * size + size / 2);
+        if (!SharedMain.PositionIsInSimulatedChunk_BlockPos(block)) {
+            return;
+        }
+        for (int i = list.Count - 1; i >= 0; i--) {
+            if (list[i] is CrystalBehaviour crystal && crystal != null) {
+                crystal.ChunkUpdate();
+            }
         }
     }
 }

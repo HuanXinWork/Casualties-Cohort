@@ -267,12 +267,12 @@ public static class ScavGameStartPatch {
     static bool Prefix(PreRunScript __instance, ref IEnumerator __result) {
         if (Net.IsRunning) {
             if (starting_game) {
-                Multiplayer.DoMultiplayerStatusMessageLog("Client is starting game by request of server.");
+                Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("client_starting_game_by_server"));
                 starting_game = false;
                 return true;
             }
             if (Net.IsClient) {
-                Multiplayer.DoMultiplayerStatusMessageLog("You can't start the game, server can.");
+                Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("client_cant_start_game"));
                 starting_game = false;
                 __result = new List<object>().GetEnumerator();
                 return false;
@@ -316,7 +316,7 @@ public static class TutorialHandler_Start_MarkiplierPatch {
     static void Postfix(TutorialHandler __instance) {
         if (Net.IsRunning) {
             Util.DelayCallLambda(1f, () => {
-                Util.DoAlert("Multiplayer Tutorial is not done!\nsorry!", true);
+                Util.DoAlert(Lang.Get("tutorial_not_done_alert"), true);
             });
             __instance.StartCourse(typeof(SandboxCourse));
             __instance.courseSelectScreen.SetActive(value: false);

@@ -405,7 +405,7 @@ namespace Together {
                     GameObject.DontDestroyOnLoad(new GameObject("KSteam", typeof(KSteam)));
                 }
             } catch (Exception e) {
-                Multiplayer.DoMultiplayerStatusMessageError($"FAILED TO INIT STEAM:\n{e.ToString()}");
+                Multiplayer.DoMultiplayerStatusMessageError(string.Format(Lang.Get("steam_init_failed"), e.ToString()));
                 Loaded = false;
                 return;
             }
@@ -414,7 +414,7 @@ namespace Together {
                 Together.log.l($"Steamworks initialized: {KSteam.GetLocalUsername()} - {KSteam.GetLocalUserSteamID()}");
             }
 
-            Multiplayer.DoMultiplayerStatusMessageLog($"Steamworks initialized!");
+            Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_initialized"));
         }
 
         public static bool CheckSteam() {

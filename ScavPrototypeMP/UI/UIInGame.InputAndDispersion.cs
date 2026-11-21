@@ -214,6 +214,7 @@ namespace Together {
                 || Chat.CHAT_textbox_input_focused
                 || PauseHandler.paused
                 || UIMainMenu.IsOpen()
+                || HostTransferUI.IsModalOpen
                 || TogetherPanelApi.IsAnyExternalInputBlockerActive()
                 || (PlayerCamera.main != null
                     && PlayerCamera.main.craftingPanel != null

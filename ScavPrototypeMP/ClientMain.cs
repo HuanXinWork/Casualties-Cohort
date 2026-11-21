@@ -317,7 +317,8 @@ public partial class ClientMain : MonoBehaviour {
                 limb.rb.angularVelocity = Util_MPExtensions.UnquantizeFloatFromShort(limb_rb_angularVelocity, _RAGDOLL_ANGVEL_QUANTIZE);
             }
         }
-        if (body.IsRagdolling() && body.TryGetNetBody(out var nb)) {
+        // 客机接收布娃娃包后保留各肢体报文落点，仅服务端归位躯干中心，避免客机侧被每包强拉回中心造成冻结感
+        if (Net.IsServer && body.IsRagdolling() && body.TryGetNetBody(out var nb)) {
             nb.SetBodyPosition(center);
         }
     }

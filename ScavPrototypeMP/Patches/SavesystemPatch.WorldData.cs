@@ -19,6 +19,9 @@ public static partial class SavesystemPatch {
     // 地图调试与教学关置为 true，避免覆盖真实联机存档 mp_save
     internal static bool PreserveSave;
 
+    // 调试地图启用 DebugWorldSaveSystem 后，防止被读取存档时的旧规则覆盖关闭
+    internal static bool DebugWorldUsesSave;
+
     // 严格保留字段名与静态签名，供 TogetherSaveWorldApi 与外部模组（如 CuSaveManager）反射绑定
     internal static bool PendingLoadMpSave;
 

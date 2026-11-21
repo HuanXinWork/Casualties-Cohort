@@ -88,6 +88,11 @@ internal class MedicalSync : CasualtiesTogetherSingleton {
     }
 
     private void LateUpdate() {
+        if (!Net.IsRunning) {
+            _lastHeartBeating = false;
+            return;
+        }
+
         UpdateCPREffects();
 
         if (!Util.IsInWoundView()) {

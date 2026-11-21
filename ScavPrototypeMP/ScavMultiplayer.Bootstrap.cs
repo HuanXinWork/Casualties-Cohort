@@ -210,6 +210,7 @@ public partial class Multiplayer {
         var is_world = a.name == "SampleScene";
         if (!is_world) {
             SavesystemPatch.PreserveSave = false;
+            SavesystemPatch.DebugWorldUsesSave = false;
         }
 
         if (Net.IsRunning) {

@@ -74,11 +74,11 @@ public partial class Multiplayer {
     public static bool ValidateClientConnectIntroductionPacket(NetDataReader reader, ref IntroductionPlayerInfo userInfo, out string deny_reason, bool check_name = true, bool userHasMasterKey = false) {
         userInfo.userName = "EMPTY_STRING";
         userInfo.color = Color24.black;
-        deny_reason = $"Server broke or some shi ig.";
+        deny_reason = "Server error.";
 
         try {
             if (!Multiplayer.ReadClientConnectIntroductionPacket(reader, ref userInfo)) {
-                deny_reason = ($"Corrupt payload.");
+                deny_reason = "Corrupt payload.";
                 return false;
             }
 
@@ -90,13 +90,14 @@ public partial class Multiplayer {
                     else
                         deny_reason = ($"Version mismatch.");
 #else
-                    deny_reason = ($"Version mismatch.");
+                    // 版本不匹配的旧客户端未必能解析 <key:...> 标签，保持纯英文文案兼容
+                    deny_reason = "Version mismatch.";
 #endif
                     return false;
                 }
                 if (Multiplayer.SERVER_TOGGLE_CHECK_GAME_HASH) {
                     if (Multiplayer.GAME_FILES_HASH != userInfo.fileHash) {
-                        deny_reason = ($"Game file Hashes mismatch.");
+                        deny_reason = "<key:deny_hash_mismatch>";
                         return false;
                     }
                 }
@@ -105,12 +106,12 @@ public partial class Multiplayer {
                 // 支持 Unicode 昵称校验：含非 ASCII 字符允许 Length >= 1，纯 ASCII 仍要求 Length >= 3
                 string sanitizedUnicode = Multiplayer.SanitizeUnicodeTextInput(userInfo.userName);
                 if (userInfo.userName != sanitizedUnicode) {
-                    deny_reason = ($"Corrupt payload.");
+                    deny_reason = "<key:deny_corrupt_payload>";
                     return false;
                 }
                 int minLength = Multiplayer.ContainsNonAscii(userInfo.userName) ? 1 : 3;
                 if (userInfo.userName.Length < minLength) {
-                    deny_reason = ($"Name too short.");
+                    deny_reason = "<key:net_name_too_short>";
                     return false;
                 }
             }
@@ -118,7 +119,7 @@ public partial class Multiplayer {
             if (!userHasMasterKey) {
                 if (Multiplayer.SERVER_TOGGLE_ENFORCE_MODLIST) {
                     if (!(new HashSet<string>(GetModGUIDs()).SetEquals(userInfo.modlist))) {
-                        deny_reason = ($"This server requires different set of mods.");
+                        deny_reason = "<key:mmsb_lobbyjoin_wrongmods>";
                         return false;
                     }
                 }
@@ -131,13 +132,13 @@ public partial class Multiplayer {
                     Multiplayer.SERVER_JOIN_SECRETS.Insert(0, userInfo.secret);
                 } else {
                     if (!String.IsNullOrEmpty(Multiplayer.INPUT_PASSWORD) && userInfo.password != Multiplayer.INPUT_PASSWORD) {
-                        deny_reason = ($"Wrong password.");
+                        deny_reason = "<key:deny_wrong_password>";
                         return false;
                     }
                 }
 
                 if (!ScavPlayer.CheckIfPlrColorIsValid(userInfo.color)) {
-                    deny_reason = ($"Invalid color.");
+                    deny_reason = "<key:deny_invalid_color>";
                     return false;
                 }
             }
@@ -147,7 +148,7 @@ public partial class Multiplayer {
             return true;
         } catch (Exception ex) {
             ModLog.Exception(LogDomain.Security, nameof(ValidateClientConnectIntroductionPacket), ex);
-            deny_reason = $"Corrupt payload.";
+            deny_reason = "Corrupt payload.";
             return false;
         }
     }

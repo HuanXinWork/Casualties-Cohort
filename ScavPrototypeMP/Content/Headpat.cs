@@ -329,6 +329,9 @@ namespace Together {
             if (x1 - x0 < 1f || y1 - y0 < 1f) {
                 return false;
             }
+            if (headRect.width < 1f || headRect.height < 1f || armRect.width < 1f || armRect.height < 1f) {
+                return false;
+            }
             int headW = head.width;
             int headH = head.height;
             int sheetW = _armW * 3;
@@ -507,7 +510,12 @@ namespace Together {
         [HarmonyPatch(typeof(Body), nameof(Body.Attack))]
         static class BlockAttack {
             static bool Prefix(Body __instance) {
-                return !Blocks(__instance);
+                if (!Blocks(__instance)) {
+                    return true;
+                }
+                // 摸头拦截未真正挥击，同步复位采集标志避免吞掉下一次正常攻击
+                Body_Attack_MultiplayerPatch.ForceOnlyRetrieveAttackInfo = false;
+                return false;
             }
         }
 

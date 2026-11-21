@@ -39,7 +39,7 @@ namespace Together {
         public static bool DISCORD_ONLYASKTOJOINBUTTON = false;
 
         [SettingDeclarerThingyBool("setting_ui_talker_species_font")]
-        public static bool USE_TALKER_SPECIES_FONT = true;
+        public static bool USE_TALKER_SPECIES_FONT = false;
 
         // 关闭时保持物种专属说话字体，位于联机界面设置分页
         [SettingDeclarerThingyBool("setting_ui_defaulttalkerfont")]
@@ -329,7 +329,7 @@ namespace Together {
 
         private void RenderAllMenus() {
             try {
-                if (!Con.IsConsoleOpen()) {
+                if (!Con.IsConsoleOpen() && !HostTransferUI.IsModalOpen) {
                     try {
                         UIMainMenu._GUI_DrawSideMenuWithPlayerList();
                         UIMainMenu._GUI_DrawMPMainMenu();

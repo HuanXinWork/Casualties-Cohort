@@ -70,6 +70,7 @@ namespace Together {
         private float _poseToAng;
         private float _poseStart;
         private float _poseDur;
+        private float _poseSample;
 
         public readonly SyncString resourceId = new();
 
@@ -392,8 +393,11 @@ namespace Together {
             }
             useIgnoreArmed = false;
             // 服务端裁决已落定，但携带最新权威状态的 LES 快照可能比可靠通道的 use_ack 晚到 1~2 个发送周期；保留 0.25s（至少 2 ticks）短尾缓冲并同步收敛手电预测锁
-            int span = Mathf.Max(2, (int)(0.25f * Net.ServerEntitySendRate));
-            lastUpdateTick = (ushort)(Net.ServerTick + span);
+            int span = Mathf.Clamp((int)(0.25f * Net.ServerEntitySendRate), 2, MaxIgnoreLead);
+            ushort newTick = (ushort)(Net.ServerTick + span);
+            if (LiteEntitySystem.Utils.SequenceDiff(newTick, lastUpdateTick) > 0) {
+                lastUpdateTick = newTick;
+            }
             CombatItemUseSync.OnServerAck(syncId.id);
         }
 

@@ -44,7 +44,6 @@ public partial class NetObjectRegistry {
         "marbleBackground",
         "mushroomdropperpayload",
         "macrofleshrebuilder",
-        "ceilingturret",
     };
 
     public static void NewGO(GameObject obj) {
@@ -108,6 +107,9 @@ public partial class NetObjectRegistry {
     internal static bool ShouldKeepRegistered(GameObject obj) {
         if (obj == null)
             return false;
+        // 挂载 KeepForJoiners 的关键层建筑（如货运心脏）常驻注册表，保证中途入房客户端随基线直接接收
+        if (obj.GetComponent<KeepForJoiners>() != null)
+            return true;
         Transform simulationTransform = obj.transform;
         while (simulationTransform.parent != null && simulationTransform.parent.TryGetComponent<Container>(out _)) {
             simulationTransform = simulationTransform.parent;
@@ -190,6 +192,10 @@ public partial class NetObjectRegistry {
 
         if (!do_slow_mode)
             return;
+
+#if FULLGAME
+        LayerBuildingStream.HostRegister();
+#endif
 
         int autoUnregisterCount = 0;
         List<SyncInfo> dropWhole = null;
@@ -317,20 +323,21 @@ public partial class NetObjectRegistry {
             if (networkignored_buildings_maingame.Contains(b.id))
                 return true;
             if (obj.TryGetComponent<Climbable>(out var c)) {
+                // spicevine / spicevineceiling 既是可攀爬植物又可被击碎，必须作为普通同步建筑处理否则破坏状态无法跨端同步
+                bool spice = b.id == TrackerClimbableEntity.spicevine_id
+                    || b.id == TrackerClimbableEntity.spicevineceiling_id
+                    || (c.name != null && c.name.StartsWith("spicevineceiling"));
+                if (spice) {
+                    if (c.name != null && c.name.StartsWith("spicevineceiling") && b.id != TrackerClimbableEntity.spicevineceiling_id)
+                        b.id = TrackerClimbableEntity.spicevineceiling_id;
+                    return false;
+                }
                 if (!obj.TryGetComponent<TrackerClimbableEntity>(out _)) {
                     var r = obj.AddComponent<TrackerClimbableEntity>();
                     if (b.id == "veinloop" || b.id == TrackerClimbableEntity.veinloop_new_id) {
                         if (string.IsNullOrEmpty(r.og_id))
                             r.og_id = "veinloop";
                         b.id = TrackerClimbableEntity.veinloop_new_id;
-                    } else if (b.id == TrackerClimbableEntity.spicevine_id
-                               || b.id == TrackerClimbableEntity.spicevineceiling_id
-                               || c.name.StartsWith("spicevineceiling")) {
-                        if (c.name.StartsWith("spicevineceiling") && b.id != TrackerClimbableEntity.spicevineceiling_id) {
-                            if (string.IsNullOrEmpty(r.og_id))
-                                r.og_id = b.id;
-                            b.id = TrackerClimbableEntity.spicevineceiling_id;
-                        }
                     }
                     if (!r.is_known_climbable) {
                         ModLog.Error($"Unknown Climbable: {c.name} -> id: {b.id}", LogDomain.World);
@@ -363,6 +370,10 @@ public partial class NetObjectRegistry {
 
     public static SyncInfo Server_EnsureItemIsNetworkRegistered(GameObject go) {
         try {
+            // 退房或场景卸载期间 Net.ShutdownReset 已清空 ServerEntityManager 但 Type 复位为 Host，须先校验会话存活与实体管理器非空
+            if (go == null || !Net.IsRunning || !Net.IsServer || Net.ServerEntityManager == null)
+                return null;
+
             if (SyncRegistry.TryGetValue(go, out var v) && v != null && !v.IsDestroyed)
                 return v;
 

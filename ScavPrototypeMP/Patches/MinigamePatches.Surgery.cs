@@ -427,7 +427,7 @@ internal static class SurgeryMinigameReceivers {
         }
 
         if (healer != null && target != null) {
-            healer.Server_DoAlertSingle("Denied amputation cut (try again)", false);
+            healer.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("serverdeny_amputation"), false);
             ModLog.Warn($"服务端拒绝截肢切割增量: {healer} -> {target}", LogDomain.Medical);
             MinigameMPManager.Server_ForceEndMinigameForPlayer(healer);
         }

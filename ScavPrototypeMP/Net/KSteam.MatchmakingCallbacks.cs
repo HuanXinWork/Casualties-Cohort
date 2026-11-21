@@ -56,7 +56,7 @@ namespace Together {
             if (enterresponse != EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess) {
                 var msg = enterresponse.ToString().TrimStart("k_EChatRoomEnterResponse");
 
-                Multiplayer.DoMultiplayerStatusMessageLog($"OnLobbyEnter failed! response: {msg}");
+                Multiplayer.DoMultiplayerStatusMessageLog(string.Format(Lang.Get("steam_lobbyenter_failed"), msg));
 
                 if (!IS_DOING_HostLobbyRecreatorLoop) {
                     IS_DOING_HostLobbyRecreatorLoop = false;
@@ -90,7 +90,7 @@ namespace Together {
 
                 if (bIOFailure) {
                     ESteamAPICallFailure reason = SteamUtils.GetAPICallFailureReason(OnLobbyEnterCallResult.Handle);
-                    Multiplayer.DoMultiplayerStatusMessageError("STEAM: OnLobbyEnter IOFailure: " + reason);
+                    Multiplayer.DoMultiplayerStatusMessageError(string.Format(Lang.Get("steam_lobbyenter_iofailure"), reason));
 
                     IS_IN_LOBBY = false;
                     Net.ShutdownReset();
@@ -102,9 +102,9 @@ namespace Together {
 
                 if (m_LobbyEnterResponse != EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess) {
                     if (m_LobbyEnterResponse == EChatRoomEnterResponse.k_EChatRoomEnterResponseDoesntExist) {
-                        Multiplayer.DoMultiplayerStatusMessageLog("STEAM: Lobby Enter Rejected: Lobby does not exist!");
+                        Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_lobbyenter_rejected_noexists"));
                     } else {
-                        Multiplayer.DoMultiplayerStatusMessageError("STEAM: Lobby Enter Rejected: " + responseStr);
+                        Multiplayer.DoMultiplayerStatusMessageError(string.Format(Lang.Get("steam_lobbyenter_rejected"), responseStr));
                     }
 
                     IS_IN_LOBBY = false;
@@ -128,15 +128,15 @@ namespace Together {
                 IS_IN_LOBBY = true;
 
 #if TESTING
-                Multiplayer.DoMultiplayerStatusMessageLog($"Steam: OnLobbyEnter  lobby: {LobbyId}   ");
+                Multiplayer.DoMultiplayerStatusMessageLog(string.Format(Lang.Get("steam_onlobbyenter_id"), LobbyId));
 #else
-                Multiplayer.DoMultiplayerStatusMessageLog($"Steam: OnLobbyEnter");
+                Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_onlobbyenter"));
 #endif
                 UpdateRichPresence();
 
                 if (Net.IsClient) {
                     if (tsteam.CreateClientSocket()) {
-                        Multiplayer.DoMultiplayerStatusMessageLog("CreateClientSocket Success.");
+                        Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_socket_success"));
 
                         Net.OnTransportConnected();
 
@@ -210,7 +210,7 @@ namespace Together {
 
                 if (joined && !isLocalUser) {
                     if (tsteam.i_am_owner_of_this_lobby && BanList.IsBanned(pCallback.m_ulSteamIDUserChanged)) {
-                        tsteam.KickMember((CSteamID)pCallback.m_ulSteamIDUserChanged, "Banned!");
+                        tsteam.KickMember((CSteamID)pCallback.m_ulSteamIDUserChanged, "<key:steam_banned>");
                         tsteam.RemoveSteamUser(pCallback.m_ulSteamIDUserChanged);
                     } else {
                         SteamFriends.RequestUserInformation((CSteamID)pCallback.m_ulSteamIDUserChanged, true);
@@ -219,7 +219,7 @@ namespace Together {
 
                 if (left || disconnected || kicked || banned) {
                     if (isLocalUser && tsteam.i_am_owner_of_this_lobby) {
-                        Multiplayer.DoMultiplayerStatusMessageLog($"I got removed from the lobby. But im the owner!\nAttempting to recreate lobby in a sec...");
+                        Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_removed_owner"));
 
                         CURRENT_LOBBY.lobby_steamID = CSteamID.Nil;
                         tsteam.Shutdown(false);
@@ -228,7 +228,7 @@ namespace Together {
                     }
 
                     if (isLocalUser) {
-                        Multiplayer.DoMultiplayerStatusMessageLog($"I got removed from the lobby.");
+                        Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_removed"));
 
                         if (Util.IsInWorld()) {
                             Multiplayer.showMultiplayerMenu = true;
@@ -262,7 +262,7 @@ namespace Together {
                     tsteam.RemoveSteamUser(pCallback.m_ulSteamIDUserChanged);
 
                     if (Net.IsClient && pCallback.m_ulSteamIDUserChanged == CURRENT_LOBBY.ownerID.m_SteamID) {
-                        Multiplayer.DoMultiplayerStatusMessageLog("LOBBY OWNER LEFT, LEAVING");
+                        Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_owner_left"));
 
                         if (Util.IsInWorld()) {
                             Multiplayer.showMultiplayerMenu = true;
@@ -287,7 +287,7 @@ namespace Together {
             string msg = System.Text.Encoding.UTF8.GetString(data, 0, ret);
             if (msg.StartsWith("KICK:")) {
                 if (pCallback.m_ulSteamIDUser == CURRENT_LOBBY.ownerID.m_SteamID) {
-                    string reason = "u got kicked for some reson";
+                    var reason = "<key:steam_kick_default>";
 
                     msg = msg.Substring(5);
                     int colonloc = msg.IndexOf(':');
@@ -298,7 +298,7 @@ namespace Together {
                     ulong targetId = ulong.Parse(msg);
 
                     if (targetId == SteamUser.GetSteamID().m_SteamID) {
-                        Multiplayer.DoMultiplayerStatusMessageLog("STEAM: Kicked: " + reason);
+                        Multiplayer.DoMultiplayerStatusMessageLog(string.Format(Lang.Get("steam_kicked"), Lang.ParseDisconnectReason(reason)));
                         LeaveLobbyAndResetNet(true);
                     }
                 }
@@ -322,7 +322,7 @@ namespace Together {
             }
             try {
                 if (pCallback.m_nLobbiesMatching == 0) {
-                    Multiplayer.DoMultiplayerStatusMessageLog("STEAM: No lobbies found, lol, game fell off");
+                    Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_no_lobbies"));
                 } else {
                     int added = 0;
                     int pendingData = 0;
@@ -373,7 +373,7 @@ namespace Together {
 
             if (bIOFailure) {
                 ESteamAPICallFailure reason = SteamUtils.GetAPICallFailureReason(OnLobbyCreatedCallResult.Handle);
-                Multiplayer.DoMultiplayerStatusMessageError("STEAM: OnLobbyCreated encountered an IOFailure due to: " + reason);
+                Multiplayer.DoMultiplayerStatusMessageError(string.Format(Lang.Get("steam_onlobbycreated_iofailure"), reason));
 
                 IS_IN_LOBBY = false;
                 Net.ShutdownReset();
@@ -384,15 +384,15 @@ namespace Together {
                 Net.ShutdownReset();
                 IS_IN_LOBBY = false;
                 if (pCallback.m_eResult == EResult.k_EResultNoConnection) {
-                    Multiplayer.DoMultiplayerStatusMessageError($"Steam: Create Lobby FAILED: No internet connection.");
+                    Multiplayer.DoMultiplayerStatusMessageError(Lang.Get("steam_create_lobby_failed_nonet"));
                     return;
                 }
-                Multiplayer.DoMultiplayerStatusMessageError($"Steam: Create Lobby FAILED: {pCallback.m_eResult}");
+                Multiplayer.DoMultiplayerStatusMessageError(string.Format(Lang.Get("steam_create_lobby_failed"), pCallback.m_eResult));
                 return;
             }
 
             if (Net.Transport == null || (Net.Transport is not TransportSteamworks)) {
-                Multiplayer.DoMultiplayerStatusMessageError($"CREATED LOBBY BUT THERES NO STEAMWORKS TRASNPORT WHAAAAT??!?!?!!??");
+                Multiplayer.DoMultiplayerStatusMessageError(Lang.Get("steam_created_no_transport"));
 
                 IS_IN_LOBBY = false;
                 Net.ShutdownReset();
@@ -426,7 +426,7 @@ namespace Together {
                 Server_UpdateLobbyData();
             });
 
-            Multiplayer.DoMultiplayerStatusMessageLog($"STEAM: Lobby Created :3");
+            Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("steam_lobby_created"));
             UpdateRichPresence();
         }
 

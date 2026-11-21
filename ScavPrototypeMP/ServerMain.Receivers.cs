@@ -50,7 +50,7 @@ public partial class ServerMain {
                     log.l($"RequestPiggyback success: {plr} -> {guybody}");
                 return;
             }
-            plr.Server_DoAlertSingle("SERVER: Denied Piggyback.");
+            plr.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("serverdeny_piggyback"));
 
             log.serverdeny($"RequestPiggyback {plr} -> {guybody}");
 
@@ -160,7 +160,7 @@ public partial class ServerMain {
                     return;
                 }
             }
-            plr.Server_DoAlertSingle("SERVER: Denied Carry.");
+            plr.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("serverdeny_carry"));
 
             log.serverdeny($"RequestCarryPerson {plr} -> {nb2}");
         }
@@ -375,6 +375,15 @@ public partial class ServerMain {
         }
     }
 
+    static readonly HarmonyLib.AccessTools.FieldRef<Body, Vector2> BodyOrigColSize =
+        HarmonyLib.AccessTools.FieldRefAccess<Body, Vector2>("origColSize");
+
+    // 对齐原版 Body.Update 饮水取样格：位于站立碰撞盒底端正下方，随物种体型高度自适应
+    static Vector2Int DrinkBlockPos(Body body) {
+        Vector3 feet = body.transform.position - Vector3.up * (BodyOrigColSize(body).y * 0.5f - 0.5f);
+        return WorldGeneration.world.WorldToBlockPos(feet);
+    }
+
     [ServerReceiver((byte)NetmsgId.SERVER_PlayerDrinkLiquid)]
     static void ServerReceiver__PlayerDrinkLiquid(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
         if (ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr)) {
@@ -384,8 +393,7 @@ public partial class ServerMain {
                 if (DebugHelp._DEV_VISUALISE_NET_EVENTS)
                     DebugHelp.OnNetEvent(plr.body.transform.position, $"S: PlayerDrinkLiquid {plr}");
 
-                var drinkblockpos = WorldGeneration.world.WorldToBlockPos(
-                    plr.body.transform.position - Vector3.up * 2.5f);
+                var drinkblockpos = DrinkBlockPos(plr.body);
 
                 var there_is_a_fluid =
                     FluidManager.main.GetLiquid(drinkblockpos.x, drinkblockpos.y);

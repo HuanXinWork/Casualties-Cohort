@@ -219,10 +219,28 @@ public static partial class CharacterSelectWait {
     }
 
     static void OnCharSelectBackClicked() {
-        if (!Waiting || LateJoinPicking) {
+        if (LateJoinPicking) {
+            return;
+        }
+        if (!Waiting) {
+            return;
+        }
+        if (Net.IsServer) {
+            AbortLobbyGate();
             return;
         }
         Reset();
+        ReleaseMenuDim();
+    }
+
+    public static void AbortLobbyGate() {
+        if (!Net.IsServer || (!Waiting && !LateJoinPicking)) {
+            return;
+        }
+        Reset();
+        ReleaseMenuDim();
+        BroadcastAbort();
+        Multiplayer.DoMultiplayerStatusMessageLog("Left character select.");
     }
 
     public static void EnsureHostLobbyGate() {
@@ -295,6 +313,7 @@ public static partial class CharacterSelectWait {
     }
 
     public static void HostBeginNewRun(bool loadSave) {
+        if (!LobbyHostTransfer.AllowRun(loadSave)) return;
         if (!Net.IsRunning || !Net.IsServer) {
             return;
         }
@@ -377,6 +396,7 @@ public static partial class CharacterSelectWait {
     }
 
     public static void OnStartOrLoadClicked(bool loadSave) {
+        if (!LobbyHostTransfer.AllowRun(loadSave)) return;
         if (!Net.IsRunning) {
             return;
         }
@@ -487,6 +507,11 @@ public static partial class CharacterSelectWait {
     }
 
     public static void Client_UpdateProgress(int ready, int max) {
+        if (ready < 0) {
+            Reset();
+            ReleaseMenuDim();
+            return;
+        }
         ReadyCount = ready;
         MaxCount = Mathf.Max(1, max);
         ForceCharSelectReadyVisual(PreRunScript.instance);
@@ -579,6 +604,7 @@ public static partial class CharacterSelectWait {
     }
 
     static void HostProceed() {
+        if (LobbyHostTransfer.Busy) return;
         if (!Net.IsServer) {
             return;
         }
@@ -632,6 +658,13 @@ public static partial class CharacterSelectWait {
         _pendingLoadSave = false;
         _pendingTutorial = false;
         _speciesLocked = false;
+    }
+
+    static void BroadcastAbort() {
+        NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_CharSelectProgress);
+        writer.Put(-1);
+        writer.Put(0);
+        Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
     }
 
     static void BroadcastWaitBegin() {

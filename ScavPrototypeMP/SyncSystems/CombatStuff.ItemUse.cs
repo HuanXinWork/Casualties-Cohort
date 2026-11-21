@@ -249,6 +249,9 @@ public static class Body_UseItemInHand_MultiplayerPatch {
     internal static void ClearHeldState(ushort id) => CombatItemUseSync.ClearHeldState(id);
 
     public static bool Prefix(Body __instance) {
+        if (Net.IsRunning && HeadpatSession.Blocks(__instance)) {
+            return false;
+        }
         _hostLight = false;
         if (!Util.IsWorldGenerated()) {
             return false;
@@ -317,6 +320,9 @@ public static class Body_UseItem_MultiplayerPatch {
     internal static void SendLightMode(SyncInfo si, NetBody nb) => CombatItemUseSync.SendLightMode(si, nb);
 
     public static bool Prefix(Body __instance, ref SyncInfo __state, Item item) {
+        if (Net.IsRunning && HeadpatSession.Blocks(__instance)) {
+            return false;
+        }
         current_used_item = item;
         __state = null;
 

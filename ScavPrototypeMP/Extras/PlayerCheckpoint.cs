@@ -23,7 +23,8 @@ public static class PlayerCheckpoint {
     static readonly Dictionary<string, int> _speciesSlot = new Dictionary<string, int>();
 
     public static void Tick() {
-        if (_writing || !Net.IsServer || !Util.IsWorldGenerated())
+        // Net.ShutdownReset 会将离线态重置，必须前置校验 Net.IsRunning 防止断线/退房瞬间客机误写本地 mp_save
+        if (_writing || !Net.IsRunning || !Net.IsServer || !Util.IsWorldGenerated())
             return;
         var world = WorldGeneration.world;
         if (world == null || world.generatingWorld)
@@ -61,7 +62,7 @@ public static class PlayerCheckpoint {
 
     // called before RegenerateWorld, while biomeDepth is still the layer they just finished.
     public static void WriteLayerTransition() {
-        if (!Net.IsServer)
+        if (!Net.IsRunning || !Net.IsServer)
             return;
         foreach (var plr in ScavPlayer.BodyToPlayerDict.Values) {
             if (plr == null || plr.body == null)
@@ -76,7 +77,7 @@ public static class PlayerCheckpoint {
             return;
         if (_writing || plr == null || plr.body == null || PlayerCamera.main == null)
             return;
-        if (!Net.IsServer)
+        if (!Net.IsRunning || !Net.IsServer)
             return;
 
         _writing = true;
@@ -105,7 +106,7 @@ public static class PlayerCheckpoint {
     public static bool TryLoadBodyOnly(ScavPlayer plr) {
         if (SavesystemPatch.PreserveSave)
             return false;
-        if (!Net.IsServer || plr == null || plr.body == null)
+        if (!Net.IsRunning || !Net.IsServer || plr == null || plr.body == null)
             return false;
         if (plr.ServerPlayerState != null && plr.ServerPlayerState.loaded_save)
             return false;
@@ -152,7 +153,7 @@ public static class PlayerCheckpoint {
     }
 
     public static void RegisterBody(Body body) {
-        if (!Net.IsServer || body == null)
+        if (!Net.IsRunning || !Net.IsServer || body == null)
             return;
         foreach (var item in body.GetAllItemsThorough()) {
             if (item != null && NetObjectRegistry.ObjectShouldBeSynced(item.gameObject))
@@ -166,6 +167,12 @@ public static class PlayerCheckpoint {
         _species[persistentId] = species;
         _speciesSlot[persistentId] = slot;
         StampSpecies(Path.Combine(SavesystemPatch.mpsavefolder, persistentId), species, slot);
+    }
+
+    // 房主迁移落地会替换整个检查点目录，必须清空内存物种缓存以强制从新存档盘重读
+    public static void OnHostTransferInstalled() {
+        _species.Clear();
+        _speciesSlot.Clear();
     }
 
     public static bool TryReadSpecies(string persistentId, out string species, out int slot) {
@@ -204,7 +211,7 @@ public static class PlayerCheckpoint {
     }
 
     internal static void ReadCrafted(string folder) {
-        if (!Net.IsServer || PlayerCamera.main == null || PlayerCamera.main.body == null)
+        if (!Net.IsRunning || !Net.IsServer || PlayerCamera.main == null || PlayerCamera.main.body == null)
             return;
         if (!PlayerCamera.main.body.TryGetNetBody(out NetBody nb) || nb == null || !nb.IsPlayer)
             return;
@@ -234,7 +241,7 @@ public static class PlayerCheckpoint {
 
     // the craft screen reads the global flag. the host's screen should match the host's own list.
     internal static void ApplyLocalCraftMarkers() {
-        if (!Net.IsServer || Recipes.recipes == null)
+        if (!Net.IsRunning || !Net.IsServer || Recipes.recipes == null)
             return;
         if (!Util.TryGetLocalBody(out Body body) || body == null)
             return;
@@ -249,7 +256,7 @@ public static class PlayerCheckpoint {
 
     // the craft screen is local. a rejoin has a fresh table, so the owner has to be told which ones they already made.
     internal static void SendCrafted(NetBody nb) {
-        if (!Net.IsServer || nb == null || !nb.IsPlayer || nb.plr == null || nb.plr.IsLocal)
+        if (!Net.IsRunning || !Net.IsServer || nb == null || !nb.IsPlayer || nb.plr == null || nb.plr.IsLocal)
             return;
         var list = nb.RecipesHasCrafterBefore;
         int n = list == null ? 0 : list.Count;
@@ -325,12 +332,16 @@ public static class PlayerCheckpoint {
     // SaveGame stores biomeDepth + 1. a mid-layer tick wants the layer they are standing on.
     static void StoreCurrentBiome(string folder, int biomeDepth) {
         var path = Path.Combine(folder, "save.sv");
+        if (!File.Exists(path))
+            return;
         var root = JObject.Parse(SaveSystem.Unzip(File.ReadAllBytes(path)));
         root["biome"] = biomeDepth;
         File.WriteAllBytes(path, SaveSystem.Zip(root.ToString(Newtonsoft.Json.Formatting.None)));
     }
 
     public static void WriteRules(bool midlevel) {
+        if (!Net.IsRunning || !Net.IsServer)
+            return;
         try {
             if (WoundView.view == null || WoundView.view.cInfo == null || WoundView.view.cInfo.Length < 3)
                 return;

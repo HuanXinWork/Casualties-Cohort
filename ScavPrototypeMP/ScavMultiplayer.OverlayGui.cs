@@ -136,11 +136,11 @@ S_LerpFactor: {_entityManager.LerpFactor}";
 
         {
             if (UIInGame.SpectatorModeActive) {
-                GUI.Label(new Rect(20, y, 400, elsize), "Spectator mode active ");
+                GUI.Label(new Rect(20, y, 400, elsize), Lang.Get("hud_spectator_mode"));
                 y += elsize;
             }
             if (UIInGame.interaction_menu_target_body != null) {
-                GUI.Label(new Rect(20, y, 400, elsize), "Player interaction menu active " + UIInGame.interaction_menu_target_body.ToString());
+                GUI.Label(new Rect(20, y, 400, elsize), string.Format(Lang.Get("hud_interaction_menu"), UIInGame.interaction_menu_target_body.ToString()));
                 y += elsize;
             }
 
@@ -245,7 +245,7 @@ S_LerpFactor: {_entityManager.LerpFactor}";
             var ogwordwrap = GUI.skin.label.wordWrap;
             GUI.skin.label.wordWrap = true;
 
-            var txt = "Last Status Message:\n" + multiplayerStatusMessage;
+            var txt = Lang.Get("netpanel_laststatus") + "\n" + multiplayerStatusMessage;
             var texthiehgt = GUI.skin.label.CalcHeight(KrokV5Optimization.FixGuiContent.Content(txt, 36), 400);
 
             GUI.Label(new Rect(20, y, 400, texthiehgt), txt);
@@ -256,10 +256,10 @@ S_LerpFactor: {_entityManager.LerpFactor}";
 
         if (Voicechat.my_output_volume > 0) {
             if (UIBullshit.IsAnyMenuOpen()) {
-                GUI.Label(new Rect(20, y, 300, elsize), "Voicechat current volume level: " + Voicechat.my_output_volume.ToString("F2"));
+                GUI.Label(new Rect(20, y, 300, elsize), string.Format(Lang.Get("hud_vc_volume"), Voicechat.my_output_volume.ToString("F2")));
                 y += elsize;
             } else {
-                GUI.Label(new Rect(20, y, 200, elsize), "Voicechat active.");
+                GUI.Label(new Rect(20, y, 200, elsize), Lang.Get("hud_vc_active"));
                 y += elsize;
             }
         }

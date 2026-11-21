@@ -3,7 +3,7 @@
   
 	<PropertyGroup>
 
-		<ModVersion>5.5.3</ModVersion>
+		<ModVersion>5.5.4</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 
 		<SlnRoot Condition="'$(SolutionDir)' != '' and '$(SolutionDir)' != '*Undefined*'">$(SolutionDir)</SlnRoot>
@@ -67,7 +67,7 @@
 	</PropertyGroup>
 
 	<PropertyGroup>
-		<BaseGamePath Condition="'$(BaseGamePath)' == '' and '$(CASUALTIESTOGETHER_GAME_PATH)' != ''">$(CASUALTIESTOGETHER_GAME_PATH)</BaseGamePath>
+		<BaseGamePath Condition="'$(BaseGamePath)' == '' and '$(CASUALTIESTOGETHER_GAME_PATH)' != '' and Exists('$(CASUALTIESTOGETHER_GAME_PATH)\CasualtiesUnknown_Data\Managed\Assembly-CSharp.dll')">$(CASUALTIESTOGETHER_GAME_PATH)</BaseGamePath>
 		<BaseGamePath Condition="'$(BaseGamePath)' == '' and Exists('$(SlnRoot)CU_$(GameType)\CasualtiesUnknown.exe')">$(SlnRoot)CU_$(GameType)</BaseGamePath>
 		<BaseGamePath Condition="'$(BaseGamePath)' == '' and Exists('$(SlnRoot)CU_Fullgame\CasualtiesUnknown.exe')">$(SlnRoot)CU_Fullgame</BaseGamePath>
 		<BaseGamePath Condition="'$(BaseGamePath)' == '' and Exists('$(SlnRoot)CU_Demo\CasualtiesUnknown.exe')">$(SlnRoot)CU_Demo</BaseGamePath>
@@ -78,8 +78,12 @@
 	</PropertyGroup>
 
 	<PropertyGroup>
-		<GameDir Condition="'$(GameDir)' == ''">$(BaseGamePath)</GameDir>
+		<!-- 仅当 BaseGamePath 指向有效的游戏安装目录时才推导 GameDir 与 BepInEx 插件目录 -->
+		<GameDir Condition="'$(GameDir)' == '' and '$(BaseGamePath)' != '' and Exists('$(BaseGamePath)\CasualtiesUnknown_Data\Managed\Assembly-CSharp.dll')">$(BaseGamePath)</GameDir>
 		<GameManagedDir Condition="'$(GameManagedDir)' == '' and '$(GameDir)' != ''">$(GameDir)\CasualtiesUnknown_Data\Managed</GameManagedDir>
+		<!-- 无有效本地游戏目录时回退到仓库内置脱壳引用桩，此时 BepInExPluginsDir 与 ModPluginOutputDir 留空 -->
+		<GameManagedDir Condition="'$(GameManagedDir)' == '' and Exists('$(SlnRoot)references\Assembly-CSharp.dll')">$(SlnRoot)references</GameManagedDir>
+		<GameManagedDir Condition="'$(GameManagedDir)' == '' and Exists('$(SlnRoot)\references\Assembly-CSharp.dll')">$(SlnRoot)\references</GameManagedDir>
 		<BepInExDir Condition="'$(BepInExDir)' == '' and '$(GameDir)' != ''">$(GameDir)\BepInEx</BepInExDir>
 		<BepInExCoreDir Condition="'$(BepInExCoreDir)' == '' and '$(BepInExDir)' != ''">$(BepInExDir)\core</BepInExCoreDir>
 		<BepInExPluginsDir Condition="'$(BepInExPluginsDir)' == '' and '$(BepInExDir)' != ''">$(BepInExDir)\plugins</BepInExPluginsDir>
@@ -98,7 +102,7 @@
 
 	<Target Name="EnsureGamePathsResolved" BeforeTargets="PrepareForBuild">
 		<PropertyGroup>
-			<ErrorText>This project requires a Casualties Unknown game installation to build. Set CASUALTIESTOGETHER_GAME_PATH environment variable, create a CU_Fullgame or CU_Demo folder next to the solution!</ErrorText>
+			<ErrorText>This project requires either stripped reference stubs under references\Assembly-CSharp.dll or a Casualties Unknown game installation (via CASUALTIESTOGETHER_GAME_PATH, -p:BaseGamePath, CU_Fullgame, or CU_Demo).</ErrorText>
 		</PropertyGroup>
 		<Error Condition="'$(GameManagedDir)' == '' or !Exists('$(GameManagedDir)\Assembly-CSharp.dll')" Text="Assembly-CSharp.dll was not found at '$(GameManagedDir)'. $(ErrorText)" />
 	</Target>

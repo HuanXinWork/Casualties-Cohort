@@ -263,162 +263,6 @@ namespace Together {
             }
         }
 
-        private void UpdateTransform() {
-            byte data = container_data1.Value;
-            bool released = data == ContainerEncoding.WorldByte && poseSeen && posePrevData != ContainerEncoding.WorldByte;
-            if (data != ContainerEncoding.WorldByte) {
-                poseHold = false;
-                poseHoldUntil = 0f;
-            } else if (released && !poseFresh) {
-                // 原地垂直丢弃时若量化坐标与入包前完全一致，服务端可能不下发新 _position；设超时自动解冻防止掉落物永久悬空
-                poseHold = true;
-                poseHoldUntil = Time.unscaledTime + NetTimingConstants.DroppedItemPoseHoldTimeout;
-            } else if (poseHold && Time.unscaledTime >= poseHoldUntil) {
-                poseHold = false;
-            }
-            poseSeen = true;
-            posePrevData = data;
-            poseFresh = false;
-
-            if (data != ContainerEncoding.WorldByte) {
-                return;
-            }
-            if (IsItem() && go.transform.parent != null) {
-                return;
-            }
-            if (IsIgnored() || poseHold) {
-                return;
-            }
-
-            ApplyTransform();
-        }
-
-        public bool shouldApplyPos;
-        public bool shouldApplyAng;
-        private readonly RaycastHit2D[] raycastHitBuffer = new RaycastHit2D[8];
-
-        private bool GlidePose(out Vector2 pos, out float angle) {
-            Vector2 raw = _position.Value;
-            float rawAng = _rotation.Value.Degrees;
-            if (Net.IsServer) {
-                pos = raw;
-                angle = rawAng;
-                return false;
-            }
-
-            float now = Time.fixedTime;
-            ushort tick = Net.ServerTick;
-            bool moved = _poseGlide
-                && ((raw - _poseTo).sqrMagnitude > 0.0001f || Mathf.Abs(Mathf.DeltaAngle(_poseToAng, rawAng)) > 0.5f);
-            if (!_poseGlide) {
-                _poseGlide = true;
-                _poseFrom = _poseTo = raw;
-                _poseFromAng = _poseToAng = rawAng;
-                _poseTick = tick;
-                _poseStart = now;
-                _poseDur = 0f;
-            } else if (moved) {
-                float prevT = _poseDur > 0f ? Mathf.Clamp01((now - _poseStart) / _poseDur) : 1f;
-                _poseFrom = Vector2.Lerp(_poseFrom, _poseTo, prevT);
-                _poseFromAng = Mathf.LerpAngle(_poseFromAng, _poseToAng, prevT);
-                _poseTo = raw;
-                _poseToAng = rawAng;
-
-                int span = Mathf.Max(1, LiteEntitySystem.Utils.SequenceDiff(tick, _poseTick));
-                float rate = Mathf.Max(1f, Net.ServerEntitySendRate);
-                float dur = span / rate;
-                float cap = Mathf.Max(Time.fixedDeltaTime * 12f, 1f / rate);
-                if (dur > cap) {
-                    dur = cap;
-                }
-
-                bool snap = (_poseTo - _poseFrom).sqrMagnitude > 48f * 48f;
-                if (snap) {
-                    _poseFrom = _poseTo;
-                    _poseFromAng = _poseToAng;
-                    dur = 0f;
-                }
-                _poseStart = now;
-                _poseDur = dur;
-                _poseTick = tick;
-                if (snap) {
-                    pos = raw;
-                    angle = rawAng;
-                    return true;
-                }
-            }
-
-            float t = _poseDur > 0f ? Mathf.Clamp01((now - _poseStart) / _poseDur) : 1f;
-            pos = Vector2.Lerp(_poseFrom, _poseTo, t);
-            angle = Mathf.LerpAngle(_poseFromAng, _poseToAng, t);
-            return false;
-        }
-
-        private void ApplyTransform() {
-            Transform trans = go.transform;
-            Vector2 currentPos = trans.position;
-            float currentAngle = trans.rotation.eulerAngles.z;
-            Vector2 scale = _scale.Value;
-            bool isRigid = go.TryGetComponent(out Rigidbody2D rb);
-
-            if (scale.x != trans.localScale.x || scale.y != trans.localScale.y) {
-                trans.localScale = new Vector3(scale.x, scale.y, trans.localScale.z);
-            }
-
-            bool poseSnap = GlidePose(out Vector2 pos, out float angle);
-
-            shouldApplyPos = true;
-            shouldApplyAng = true;
-
-            bool prevRelax = relaxed_combat_sync;
-            if (tracker.isVisible && isRigid) {
-                RigidbodyType2D newRigidType = rb_dynamic.Value ? RigidbodyType2D.Dynamic : RigidbodyType2D.Static;
-                if (rb.bodyType != newRigidType) {
-                    rb.bodyType = newRigidType;
-                }
-                if (rb_dynamic.Value && itemLock.Value) {
-                    rb.GetOrAddComponent<ItemLock>();
-                }
-
-                if (IsContactDangerous() && Util.TryGetLocalBody(out Body body)) {
-                    if (shouldApplyPos) {
-                        Vector2 direction = KM.ClampLength(pos - currentPos, 10f);
-                        int hitCount = rb.Cast(direction, raycastHitBuffer, 10f);
-
-                        bool didHitLocalBody = false;
-                        for (int i = 0; i < hitCount; i++) {
-                            Transform hitTrans = raycastHitBuffer[i].transform;
-                            if (hitTrans != null && Util.TryGetBodyFromObject(hitTrans.gameObject, out Body hitBody) && hitBody == body) {
-                                didHitLocalBody = true;
-                                break;
-                            }
-                        }
-                        relaxed_combat_sync = didHitLocalBody;
-                    } else if (shouldApplyAng && relaxed_combat_sync) {
-                        angle = Mathf.LerpAngle(currentAngle, angle, 0.1f);
-                    }
-                }
-            }
-
-            if (relaxed_combat_sync || prevRelax) {
-                pos = Vector2.Lerp(currentPos, pos, 0.2f);
-                angle = Mathf.LerpAngle(currentAngle, angle, 0.2f);
-            } else if (isRigid && rb.bodyType == RigidbodyType2D.Dynamic && rb.simulated) {
-                rb.velocity = _velocity.Value;
-                rb.angularVelocity = angvel;
-            }
-
-            EnemyMoveProbe.NoteObject(this, pos, currentPos, poseSnap);
-            if (shouldApplyPos) {
-                trans.position = pos;
-                shouldApplyPos = false;
-            }
-            if (shouldApplyAng) {
-                trans.rotation = Quaternion.Euler(0f, 0f, angle);
-                shouldApplyAng = false;
-            }
-        }
-
         private void UpdateItemContainer() {
             if (go == null || item == null) {
                 return;
@@ -697,7 +541,9 @@ namespace Together {
             } else if (b.TryGetComponent(out PistonScript _)) {
                 // 客户端活塞跟随由活塞自身的 Update 读取 specialdata1 处理
             } else if (b.TryGetComponent(out CrystalEnemy manifestation)) {
-                Traverse.Create(manifestation).Field("stuck").SetValue(specialdata1.Value != 0);
+                Traverse manifest = Traverse.Create(manifestation);
+                manifest.Field("stuck").SetValue(specialdata1.Value != 0);
+                manifest.Field("timeBeforeAttack").SetValue(specialdata2.Value);
 #if FULLGAME
             } else if (b.TryGetComponent(out LaserDroneScript cryoDrone)) {
                 TrapClaim.ClientCryoFollowHost(cryoDrone);
@@ -726,10 +572,6 @@ namespace Together {
                 return true;
             }
             return false;
-        }
-
-        public bool IsContactDangerous() {
-            return go.TryGetComponent(out SpiderHandler _) || go.TryGetComponent(out DamagingCrate _);
         }
     }
 }

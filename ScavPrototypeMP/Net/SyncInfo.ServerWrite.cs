@@ -483,7 +483,7 @@ namespace Together {
                     spider_stunTime.Value = spider.stunTime;
                 } else if (go.TryGetComponent(out GrabberPlant grabber)) {
                     if (GrabberPlant_Update_MultiplayerPatch.Live(go.transform.position)) {
-                        grabberplant_tipPos.Value = grabber.tipPos;
+                        grabberplant_tipPos.Value = GrabberPlant_Update_MultiplayerPatch.Aim(grabber);
                         GrabberPlant_Update_MultiplayerPatch.WriteScale(grabber, this);
                     }
                 } else if (go.TryGetComponent(out TraderScript trader)) {
@@ -498,7 +498,10 @@ namespace Together {
                 } else if (b.TryGetComponent(out PistonScript piston)) {
                     specialdata1.Value = Traverse.Create(piston).Field("up").GetValue<bool>().ToByte();
                 } else if (b.TryGetComponent(out CrystalEnemy manifestation)) {
-                    specialdata1.Value = Traverse.Create(manifestation).Field("stuck").GetValue<bool>().ToByte();
+                    // bit0 同步潜伏标志 stuck，specialdata2 同步蓄力倒计时以对齐客户端嗡鸣音效
+                    Traverse manifest = Traverse.Create(manifestation);
+                    specialdata1.Value = manifest.Field("stuck").GetValue<bool>().ToByte();
+                    specialdata2.Value = manifest.Field("timeBeforeAttack").GetValue<float>();
 #if FULLGAME
                 } else if (b.TryGetComponent(out LaserDroneScript cryoDrone)) {
                     specialdata1.Value = cryoDrone.open.ToByte();

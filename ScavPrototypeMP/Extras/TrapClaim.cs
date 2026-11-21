@@ -68,6 +68,8 @@ internal static partial class TrapClaim {
     static Vector2 lastLocalBoom;
     static float lastLocalBoomTime;
     static int hideDepth;
+    // 晶体爆炸常生成在地板格碰撞体内，原版从爆心直接 Linecast 会把脚下砖块误判为掩体
+    static bool blastInGround;
 
     internal static bool SkipRemote(Component hit) {
         if (!Net.IsRunning || hit == null) {
@@ -88,7 +90,7 @@ internal static partial class TrapClaim {
     }
 
     static void Send(byte kind, knetid id, ushort mask) {
-        if (!Net.IsClient || id.id == 0) {
+        if (!Net.IsClient || (id.id == 0 && kind != KindGlass)) {
             return;
         }
         var writer = Net.CreateWriter(NetmsgId.SERVER_TrapClaim);

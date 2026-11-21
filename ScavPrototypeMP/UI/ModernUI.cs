@@ -112,6 +112,9 @@ public static class SettingsMenu_Start_MultiplayerPatch {
         const string gap = "     ";
 
         foreach (UIMainMenu.SettingsTab settingsTab in UIMainMenu.SettingsTab.tabs) {
+            if (settingsTab == UIMainMenu._language_setting_tab) {
+                continue;
+            }
             List<FieldInfo> fields = UIMainMenu.GetSettingsFromStaticClass(settingsTab.settings_origin);
 
             CreateSettingButton(gap + Lang.Get(settingsTab.name), ref num, out GameObject headerObj, out Button headerBtn, out TextMeshProUGUI headerText);
@@ -365,7 +368,7 @@ internal class MultiplayerSettingsHandler : MonoBehaviour {
 
             UITooltip uiTooltip = SettingsMenu_Start_MultiplayerPatch.DeactivateButton.GetComponentInChildren<UITooltip>();
             if (uiTooltip != null) {
-                uiTooltip.tipDesc = canDeactivate ? "mmst_button_deactivate_mp_desc" : "mmst_button_deactivate_mp_desc_disabled";
+                uiTooltip.tipDesc = Lang.GetNoError(canDeactivate ? "mmst_button_deactivate_mp_desc" : "mmst_button_deactivate_mp_desc_disabled");
             }
         }
     }

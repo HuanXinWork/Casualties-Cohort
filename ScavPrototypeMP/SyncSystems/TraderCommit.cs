@@ -233,7 +233,7 @@ internal static class TraderCommit {
         trader.MoveRange.max = moveMax;
         trader.didMove = didMove;
         trader.reputation = reputation;
-        trader.hostility = hostility;
+        TraderWindup.Note(trader, hostility);
         trader.haggleAmount = haggleAmount;
         trader.freeDressing = freeDressing;
         trader.didHug = didHug;
@@ -247,6 +247,7 @@ internal static class TraderCommit {
             trader.items.Clear();
         }
         trader.items.AddRange(items);
+        trader.GetOrAddComponent<TrackerTrader>().received_their_inv = true;
         RefreshOpen(trader);
     }
 
@@ -444,6 +445,9 @@ internal static class TraderCommit {
             }
         } finally {
             Pumping.Remove(id);
+            if (Queues.TryGetValue(id, out Queue<Job> drained) && drained.Count == 0) {
+                Queues.Remove(id);
+            }
         }
     }
 
@@ -481,9 +485,7 @@ internal static class TraderCommit {
                     }
                     break;
                 case Op.Threaten:
-                    if (trader.reputation >= 30f) {
-                        trader.Threaten();
-                    }
+                    trader.Threaten();
                     break;
                 case Op.Hug:
                     if (!trader.didHug) {
@@ -623,6 +625,9 @@ internal static class TraderCommit {
         }
 
         if (live == null)
+            return;
+        // 服务端 TraderScript.Start 尚未初始化商品列表前不下发空快照，让客户端 AskWhenReady 继续轮询直到库存生成完毕
+        if (live.items == null)
             return;
 
         ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out _, out Body body);

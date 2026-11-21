@@ -257,7 +257,7 @@ internal static partial class TrapClaim {
         } else if (kind == KindBoom) {
             ok = AcceptBoom(id, nb, mask);
         } else if (kind == KindManifest) {
-            ok = AcceptManifest(id, nb);
+            ok = AcceptManifest(id, nb, mask);
         }
 #if FULLGAME
         else if (kind == KindCryo) {

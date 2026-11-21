@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Text;
 using CasualtiesTogetherUtils;
@@ -140,30 +139,6 @@ public partial class WorldMP : CasualtiesTogetherSingleton {
         }
     }
 
-    static Dictionary<string, object> SettingTupleListToDict(List<(string, string)> tupleList) {
-        if (tupleList == null) {
-            throw new ArgumentNullException(nameof(tupleList));
-        }
-
-        Dictionary<string, object> dict = new();
-        foreach ((string settingKey, string valueStr) in tupleList) {
-            List<RunSetting> matches = RunSettings.settingTypes.Where(x => x.name == settingKey).ToList();
-            if (matches.Count == 0) {
-                continue;
-            }
-
-            RunSetting first = matches[0];
-            if (first is RunSettingFloat) {
-                dict.Add(settingKey, float.Parse(valueStr, CultureInfo.InvariantCulture));
-            } else if (first is RunSettingBool) {
-                dict.Add(settingKey, bool.Parse(valueStr));
-            } else if (first is RunSettingDropdown) {
-                dict.Add(settingKey, int.Parse(valueStr));
-            }
-        }
-        return dict;
-    }
-
     public static string CompileRunSettings() {
         string input = JsonConvert.SerializeObject(SaveSystem.DicToTupleList(runSettings), Formatting.None, new JsonSerializerSettings {
             ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
@@ -177,9 +152,7 @@ public partial class WorldMP : CasualtiesTogetherSingleton {
         try {
             string decoded = Encoding.UTF8.GetString(Util.Decompress(Convert.FromBase64String(base64)));
             JArray jArray = JArray.Parse(decoded);
-            foreach (KeyValuePair<string, object> item in SettingTupleListToDict(jArray.ToObject<List<(string, string)>>())) {
-                dict[item.Key] = item.Value;
-            }
+            dict = RunSettingsCodec.Decode(jArray, dict, key => ModLog.Warning("ReadRunSettings: ignored unsupported value for " + key, LogDomain.World));
         } catch (Exception ex) {
             ModLog.Exception(LogDomain.World, nameof(ReadRunSettings), ex);
         }
@@ -312,10 +285,19 @@ public partial class WorldMP : CasualtiesTogetherSingleton {
     }
 
     public static void LoadDebugWorld() {
+#if FULLGAME
+        // 清理残留的选人等待门控，防止进调试世界时跳过大厅角色创建
+        CharacterSelectWait.AbortLobbyGate();
+#endif
         _CheckIfCanLoadAWorld();
         SetTutorialPlayerPrefs(false);
-        SavesystemPatch.PreserveSave = true;
-        SaveSystem.loadedRun = false;
+        // 根据房间规则决定调试世界是否接入正常 mp_save 读写链路
+        bool useSaves = Multiplayer.rules.DebugWorldSaveSystem;
+        SavesystemPatch.PreserveSave = !useSaves;
+        SavesystemPatch.DebugWorldUsesSave = useSaves;
+        SavesystemPatch.PendingLoadMpSave = useSaves;
+        SaveSystem.loadedRun = useSaves;
+        ModLog.Info(useSaves ? "Debug world: mp_save on" : "Debug world: mp_save skipped", LogDomain.World);
 
         if (Multiplayer.IsNetworkActiveAndIsServer()) {
             ServerMain.Server_Announce_GAME_START();
@@ -405,6 +387,10 @@ public partial class WorldMP : CasualtiesTogetherSingleton {
     }
 
     public static void LoadWorldScene(bool loadsave = false, bool fadeout = true) {
+#if FULLGAME
+        // HostProceed 正常已清理门控，此处兜底未经过标准大厅开局流程的场景切换
+        CharacterSelectWait.AbortLobbyGate();
+#endif
         if (world != null) {
             throw new InvalidOperationException("World is already loaded.");
         }

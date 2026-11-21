@@ -442,4 +442,8 @@ public static partial class MoveCommit {
         }
         return receipt;
     }
+
+    public static void Forget(knetid player) {
+        Books.Remove(player);
+    }
 }

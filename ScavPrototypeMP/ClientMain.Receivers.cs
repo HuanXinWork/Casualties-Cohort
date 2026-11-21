@@ -106,9 +106,9 @@ public partial class ClientMain {
         reader.Get(out bool is_error);
 
         if (is_error) {
-            Multiplayer.DoMultiplayerStatusMessageError(msg);
+            Multiplayer.DoMultiplayerStatusMessageError(Lang.ParseTaggedString(msg));
         } else {
-            Multiplayer.DoMultiplayerStatusMessageLog(msg);
+            Multiplayer.DoMultiplayerStatusMessageLog(Lang.ParseTaggedString(msg));
         }
     }
 
@@ -272,7 +272,10 @@ public partial class ClientMain {
                 Multiplayer.DoMultiplayerStatusMessageLog("Received RegenerateWorld announcement.");
             }
 
-            PlayerCamera.main.body.forceWalk = false;
+            // 死亡或观战中的客机在切层重建世界时 PlayerCamera.main.body 可能为空，必须判空避免抛 NRE 阻断 RegenerateWorld 协程
+            if (PlayerCamera.main?.body != null) {
+                PlayerCamera.main.body.forceWalk = false;
+            }
             wginst.savePanel.SetActive(false);
 
             bool dopod = (doPod == 1);
@@ -379,8 +382,11 @@ public partial class ClientMain {
     [ClientReceiver((byte)NetmsgId.CLIENT_ragdollpack)]
     static void ClientReceiver__ragdollpack(knetid senderId, LiteNetLib.Utils.NetDataReader reader) {
         reader.Get(out knetid netbodyid);
-        if (NetBody.TryGetNetBodyFromId(netbodyid, out var _)) {
-            _ = reader.DecompressReader();
+        if (NetBody.TryGetNetBodyFromId(netbodyid, out var nb)) {
+            reader = reader.DecompressReader();
+            if (nb.body != null) {
+                ReadRagdollPacket(ref reader, nb.body);
+            }
         }
     }
 
@@ -477,6 +483,7 @@ public partial class ClientMain {
             if (count > 0) {
                 Multiplayer.rules = new_rules;
                 Multiplayer.ApplyGameRules();
+                log.l("[rules] applied sv_cheats=" + Multiplayer.rules.sv_cheats + " clientcheats=" + Multiplayer.rules.AllowClientCheatCommands);
 
                 if (log.verbose && !String.IsNullOrWhiteSpace(msg) && count > 0)
                     Multiplayer.DoMultiplayerStatusMessageLog(msg);

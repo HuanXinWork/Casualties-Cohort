@@ -36,9 +36,9 @@
 		<EmbeddedResource Include="assets\cooltextshader.bundle" />
 		<EmbeddedResource Include="assets\locale\EN.json" />
 		<EmbeddedResource Include="assets\locale\es-ES.json" />
+		<EmbeddedResource Include="assets\locale\ru-RU.json" />
 		<EmbeddedResource Include="assets\locale\zh-CN.json" />
 		<EmbeddedResource Include="assets\locale\zh-TW.json" />
-		<EmbeddedResource Include="assets\locale\RU.json" />
 		<EmbeddedResource Include="assets\nsfw-server-filter.json" />
 		<EmbeddedResource Include="assets\retrogaming.bundle" />
 		<EmbeddedResource Include="assets\textures\dune_stare.png" />
@@ -114,10 +114,7 @@
 		<Reference Include="LiteEntitySystem">
 			<HintPath>$(LibsDir)\LiteEntitySystem.dll</HintPath>
 		</Reference>
-		<Reference Include="com.rlabrecque.steamworks.net" Condition="'$(GameType)' != 'Fullgame'">
-			<HintPath>$(LibsDir)\com.rlabrecque.steamworks.net.dll</HintPath>
-		</Reference>
-		<Reference Include="com.rlabrecque.steamworks.net" Condition="'$(GameType)' == 'Fullgame'">
+		<Reference Include="com.rlabrecque.steamworks.net">
 			<HintPath>$(GameManagedDir)\com.rlabrecque.steamworks.net.dll</HintPath>
 		</Reference>
 
@@ -258,7 +255,7 @@
 		</ItemGroup>
 	</Target>
 
-	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
+	<Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(ModPluginOutputDir)' != ''">
 		<MakeDir Directories="$(ModPluginOutputDir)" />
 		<ItemGroup>
 			<BuildOutputFiles Include="$(TargetDir)$(TargetFileName)" />

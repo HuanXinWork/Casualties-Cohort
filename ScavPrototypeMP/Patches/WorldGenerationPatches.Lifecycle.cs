@@ -200,6 +200,7 @@ public static class WorldGeneration_GenerateWorld_MultiplayerPatch {
 
     public static LastBeforeGenerationState firstworldgenparams;
     public static bool client_firstworldgenparams_are_used = true;
+    private static bool _specialPrefabsReady;
 
     private static readonly string[] RegisteredStructurePrefabPaths = {
         "Lifepod",
@@ -217,37 +218,110 @@ public static class WorldGeneration_GenerateWorld_MultiplayerPatch {
         "Special/EndLab",
     };
 
+    // 重复改写已修改过的预制体资源存在引发底层崩溃的风险，统一通过带日志与异常捕获的辅助函数加载并配合 _specialPrefabsReady 保证单次幂等
+    static GameObject LoadPrefab(string id) {
+        log.l("[prefab] load " + id);
+        try {
+            GameObject go = Resources.Load<GameObject>(id);
+            if (go == null) {
+                log.warn("[prefab] missing " + id);
+            }
+            return go;
+        } catch (Exception ex) {
+            log.error("[prefab] load fail " + id + "\n" + ex);
+            return null;
+        }
+    }
+
+    static void PatchClimbable(string id, string newId) {
+        GameObject go = LoadPrefab(id);
+        if (go == null) {
+            return;
+        }
+        try {
+            TrackerClimbableEntity c = go.GetOrAddComponent<TrackerClimbableEntity>();
+            BuildingEntity b = go.GetComponent<BuildingEntity>();
+            if (b == null) {
+                log.warn("[prefab] no building " + id);
+                return;
+            }
+            if (string.IsNullOrEmpty(c.og_id)) {
+                c.og_id = b.id;
+            }
+            if (newId != null) {
+                b.id = newId;
+            }
+            log.l("[prefab] ok " + id);
+        } catch (Exception ex) {
+            log.error("[prefab] patch fail " + id + "\n" + ex);
+        }
+    }
+
     public static void InitializeSpecialResourcePrefabs() {
-        var ticks = (GameObject)Resources.Load("CaveTicks");
+        if (_specialPrefabsReady) {
+            log.l("[prefab] skip, already patched");
+            return;
+        }
+        log.l("[prefab] begin");
+
+        GameObject ticks = LoadPrefab("CaveTicks");
         if (ticks != null) {
-            ticks.GetOrAddComponent<TrackerStaticCaveTicks>();
+            try {
+                ticks.GetOrAddComponent<TrackerStaticCaveTicks>();
+                log.l("[prefab] ok CaveTicks");
+            } catch (Exception ex) {
+                log.error("[prefab] patch fail CaveTicks\n" + ex);
+            }
         }
 
-        RegisterClimbablePrefab("Special/sandvinerope", TrackerClimbableEntity.sandvine_new_id);
-        RegisterClimbablePrefab("Special/mushroomrope", TrackerClimbableEntity.mushroomrope_new_id);
+        PatchClimbable("Special/sandvinerope", TrackerClimbableEntity.sandvine_new_id);
+        PatchClimbable("Special/mushroomrope", TrackerClimbableEntity.mushroomrope_new_id);
 
 #if FULLGAME
-        RegisterClimbablePrefab("Special/veinloop", TrackerClimbableEntity.veinloop_new_id);
-        RegisterClimbablePrefab(TrackerClimbableEntity.spicevine_id, null);
-        RegisterClimbablePrefab(TrackerClimbableEntity.spicevineceiling_id, TrackerClimbableEntity.spicevineceiling_id);
+        PatchClimbable("Special/veinloop", TrackerClimbableEntity.veinloop_new_id);
+        PatchClimbable(TrackerClimbableEntity.spicevine_id, null);
+        PatchClimbable(TrackerClimbableEntity.spicevineceiling_id, TrackerClimbableEntity.spicevineceiling_id);
 #endif
 
-        var climbingropeextended = (GameObject)Resources.Load("climbingropeextended");
-        climbingropeextended?.GetOrAddComponent<TrackerClimbableEntity>();
+        GameObject climbingropeextended = LoadPrefab("climbingropeextended");
+        if (climbingropeextended != null) {
+            try {
+                climbingropeextended.GetOrAddComponent<TrackerClimbableEntity>();
+                log.l("[prefab] ok climbingropeextended");
+            } catch (Exception ex) {
+                log.error("[prefab] patch fail climbingropeextended\n" + ex);
+            }
+        }
 
-        var ladder = (GameObject)Resources.Load("ladder");
-        ladder?.GetOrAddComponent<TrackerClimbableEntity>();
+        GameObject ladder = LoadPrefab("ladder");
+        if (ladder != null) {
+            try {
+                ladder.GetOrAddComponent<TrackerClimbableEntity>();
+                log.l("[prefab] ok ladder");
+            } catch (Exception ex) {
+                log.error("[prefab] patch fail ladder\n" + ex);
+            }
+        }
 
-        var defibrack = (GameObject)Resources.Load("Special/defibrack");
-        if (defibrack != null && defibrack.TryGetComponent<BuildingEntity>(out var defibBuilding)) {
-            defibBuilding.id = "Special/defibrack";
+        GameObject defibrack = LoadPrefab("Special/defibrack");
+        if (defibrack != null) {
+            try {
+                BuildingEntity rack = defibrack.GetComponent<BuildingEntity>();
+                if (rack == null) {
+                    log.warn("[prefab] no building Special/defibrack");
+                } else {
+                    rack.id = "Special/defibrack";
+                    log.l("[prefab] ok Special/defibrack");
+                }
+            } catch (Exception ex) {
+                log.error("[prefab] patch fail Special/defibrack\n" + ex);
+            }
         }
 
         foreach (string path in RegisteredStructurePrefabPaths) {
             try {
-                GameObject basObj = Resources.Load<GameObject>(path);
+                GameObject basObj = LoadPrefab(path);
                 if (basObj == null) {
-                    ModLog.Warning($"Force-register backgrounds: missing prefab {path}", LogDomain.World);
                     continue;
                 }
                 foreach (Transform ch in basObj.transform) {
@@ -258,42 +332,67 @@ public static class WorldGeneration_GenerateWorld_MultiplayerPatch {
             }
         }
 
-        var heavyDrill = Resources.Load<GameObject>("heavydrill");
-        var audio = heavyDrill != null ? heavyDrill.GetComponent<AudioSource>() : null;
-        if (audio != null) {
-            audio.spatialBlend = 1f;
-            audio.volume *= 0.6f;
-            audio.maxDistance = 150f;
-            audio.minDistance = 30f;
-            audio.rolloffMode = AudioRolloffMode.Linear;
+#if FULLGAME
+        try {
+            GameObject heartCont = LoadPrefab("Structures/BlueHeartCont");
+            if (heartCont != null) {
+                BlueHeart[] hearts = heartCont.GetComponentsInChildren<BlueHeart>(true);
+                for (int i = 0; i < hearts.Length; i++) {
+                    if (hearts[i] == null) {
+                        continue;
+                    }
+                    BuildingEntity heartBuild = hearts[i].GetComponent<BuildingEntity>();
+                    if (heartBuild == null) {
+                        heartBuild = hearts[i].GetComponentInParent<BuildingEntity>();
+                    }
+                    if (heartBuild == null) {
+                        heartBuild = hearts[i].gameObject.AddComponent<BuildingEntity>();
+                        heartBuild.id = "KMPSR_BlueHeart";
+                    } else if (string.IsNullOrEmpty(heartBuild.id) || heartBuild.id == "background") {
+                        heartBuild.id = "KMPSR_BlueHeart";
+                    }
+                    if (heartBuild.id == "KMPSR_BlueHeart") {
+                        ScavMPBuildingSynchronizer.known_entities_with_nonunique_id[heartBuild.id] = heartBuild.gameObject;
+                    }
+                }
+                log.l("[prefab] ok Structures/BlueHeartCont");
+            }
+        } catch (Exception ex) {
+            log.error("[prefab] patch fail Structures/BlueHeartCont\n" + ex);
+        }
+#endif
+
+        try {
+            GameObject heavyDrill = LoadPrefab("heavydrill");
+            AudioSource audio = heavyDrill != null ? heavyDrill.GetComponent<AudioSource>() : null;
+            if (audio != null) {
+                audio.spatialBlend = 1f;
+                audio.volume *= 0.6f;
+                audio.maxDistance = 150f;
+                audio.minDistance = 30f;
+                audio.rolloffMode = AudioRolloffMode.Linear;
+                log.l("[prefab] ok heavydrill");
+            }
+        } catch (Exception ex) {
+            log.error("[prefab] patch fail heavydrill\n" + ex);
         }
 
         foreach (var item in NetObjectRegistry.lowpriority_objects_resourceids) {
+            GameObject basObj = null;
             try {
-                GameObject basObj = Resources.Load<GameObject>(item);
-                basObj?.GetOrAddComponent<ItemDespawnerIfUntouched>();
+                basObj = LoadPrefab(item);
+                if (basObj == null) {
+                    continue;
+                }
+                basObj.GetOrAddComponent<ItemDespawnerIfUntouched>();
+                log.l("[prefab] ok " + item);
             } catch (Exception ex) {
-                ModLog.Exception(LogDomain.World, "AttachDespawner(" + item + ")", ex);
+                log.error("[prefab] despawn fail " + item + " " + basObj + "\n" + ex);
             }
         }
-    }
 
-    static void RegisterClimbablePrefab(string resourcePath, string overrideBuildingId) {
-        var prefab = (GameObject)Resources.Load(resourcePath);
-        if (prefab == null) {
-            return;
-        }
-        var tracker = prefab.GetOrAddComponent<TrackerClimbableEntity>();
-        var building = prefab.GetComponent<BuildingEntity>();
-        if (building == null) {
-            return;
-        }
-        if (string.IsNullOrEmpty(tracker.og_id)) {
-            tracker.og_id = building.id;
-        }
-        if (!string.IsNullOrEmpty(overrideBuildingId)) {
-            building.id = overrideBuildingId;
-        }
+        _specialPrefabsReady = true;
+        log.l("[prefab] done");
     }
 
     public static bool Prefix(WorldGeneration __instance, ref IEnumerator __result) {
@@ -307,7 +406,7 @@ public static class WorldGeneration_GenerateWorld_MultiplayerPatch {
 }
 
 /// <summary>
-/// 房主死亡后允许抵达出口的存活客机弹出过关/保存面板并向服务端发起 <c>layer_continue</c> / <c>layer_save</c> 请求（对齐 v5.5.3）。
+/// 房主死亡后除房主自身常驻结算面板外，兼容允许已抵达出口的存活客机在全员达标时通过 <c>layer_continue</c> / <c>layer_save</c> 代理推进下一层或保存退出。
 /// </summary>
 internal static class LayerExitWhenHostDead {
     private static bool saveBusy;
@@ -374,21 +473,68 @@ internal static class LayerExitWhenHostDead {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.Update))]
 internal static class WorldGeneration_Update_DeadHostExitPanel {
     private static void Postfix(WorldGeneration __instance) {
-        if (!Net.IsRunning || __instance == null || __instance.savePanel == null
-            || !ServerMain.HostBodyIsDead() || __instance.doingRegen || __instance.generatingWorld || !__instance.worldExists) {
+        if (!Net.IsRunning || __instance == null || __instance.savePanel == null) {
             return;
         }
-        bool show = ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
+        if (Net.IsClient) {
+            // 房主死亡且本地存活客机已抵达出口、人数达标时保留面板供客机代理点击；其余情况一律按上游规则收起面板并给出对应等待提示
+            bool allowDeadHostProxy = ServerMain.HostBodyIsDead()
+                && !__instance.doingRegen && !__instance.generatingWorld && __instance.worldExists
+                && ServerMain.LocalPlayerAtLayerExit() && ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
+#if FULLGAME
+            if (FullgameWorldCompat.IsAscentLayer()) {
+                allowDeadHostProxy = false;
+            }
+#endif
+            if (allowDeadHostProxy) {
+                if (!__instance.savePanel.activeSelf) {
+                    __instance.savePanel.SetActive(true);
+                }
+                if (PlayerCamera.main?.body != null) {
+                    PlayerCamera.main.body.forceWalk = false;
+                }
+                return;
+            }
+
+            if (__instance.savePanel.activeSelf) {
+                __instance.savePanel.SetActive(false);
+                if (PlayerCamera.main != null && PlayerCamera.main.body != null) {
+                    PlayerCamera.main.body.forceWalk = false;
+                    ScavPlayer plr = ScavPlayer.LocalPlayer;
+                    if (plr != null && !__instance.doingRegen && !__instance.generatingWorld && __instance.worldExists && !plr.finishedLayer) {
+                        plr.finishedLayer = true;
+                        if (ServerMain.HostBodyIsDead() || ServerMain.GetNumberOfPlayersRequiredToFinishLayer() == 1) {
+                            PlayerCamera.main.DoAlert(Lang.Get("layerfinish_wait_for_host"));
+                        } else {
+                            PlayerCamera.main.DoAlert(Lang.Get("layerfinish_wait_for_friends"));
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        ApplyHostExitPanel(__instance);
+    }
+
+    // 帧末最终裁定房主端结算面板显隐，防止原版仅检查房主自身 y 坐标把全员达标的面板反复关掉（同时供 TilemapSync 调用）
+    internal static void ApplyHostExitPanel(WorldGeneration world) {
+        if (world == null || world.savePanel == null) {
+            return;
+        }
+        if (world.doingRegen || world.generatingWorld || !world.worldExists) {
+            return;
+        }
+        bool open = ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
 #if FULLGAME
         if (FullgameWorldCompat.IsAscentLayer()) {
-            show = false;
+            open = false;
         }
 #endif
-        if (show && Net.IsClient && !ServerMain.LocalPlayerAtLayerExit()) {
-            show = false;
+        if (world.savePanel.activeSelf != open) {
+            world.savePanel.SetActive(open);
         }
-        if (__instance.savePanel.activeSelf != show) {
-            __instance.savePanel.SetActive(show);
+        if (open && PlayerCamera.main != null && PlayerCamera.main.body != null) {
+            PlayerCamera.main.body.forceWalk = false;
         }
     }
 }
@@ -404,6 +550,7 @@ public static class WorldGenerationSaveAndExitPatch {
                 if (LayerExitWhenHostDead.ClientAsk(__instance, save: true)) {
                     return false;
                 }
+                __instance.savePanel.SetActive(false);
                 PlayerCamera.main?.DoAlert(Lang.Get("wait_for_host"));
                 return false;
             }
@@ -434,6 +581,7 @@ public static class WorldGeneration_ContinueRun_MultiplayerPatch {
             if (LayerExitWhenHostDead.ClientAsk(__instance, save: false)) {
                 return false;
             }
+            __instance.savePanel.SetActive(false);
             PlayerCamera.main?.DoAlert(Lang.Get("wait_for_host"));
             return false;
         }

@@ -255,7 +255,9 @@ internal sealed class StimulantSync : CasualtiesTogetherSingleton {
     }
 
     internal static void ApplyClientLocalBeforeMoodles() {
-        if (!Net.IsRunning || !Net.IsClient || !NetBody.TryGetLocalNetBody(out NetBody localNb) || localNb == null || localNb.body == null) {
+        // 客机刚生成本地 NetBody 但 LiteEntitySystem SyncBody 尚未绑定的数帧窗口期内不可访问 localNb.netId
+        if (!Net.IsRunning || !Net.IsClient || !NetBody.TryGetLocalNetBody(out NetBody localNb)
+            || localNb == null || localNb.body == null || localNb.syncBody == null) {
             return;
         }
         if (ClientSyncedStates.TryGetValue(localNb.netId.id, out ClientStimState state)) {

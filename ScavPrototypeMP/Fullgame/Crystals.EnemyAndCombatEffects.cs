@@ -205,6 +205,8 @@ internal static class CrystalEnemy_Update_MultiplayerPatch {
                 }
                 PlayerCamera.main.threatMusicTime = 2f;
             }
+            ClientHum(__instance);
+            ClientStreak(__instance);
             return false;
         }
 
@@ -253,6 +255,93 @@ internal static class CrystalEnemy_Update_MultiplayerPatch {
         if (PlayerCamera.main.currentThreatTheme == 17 || PlayerCamera.main.currentThreatTheme == 18) {
             PlayerCamera.main.currentThreatTheme = 0;
             PlayerCamera.main.threatMusicTime = 0f;
+        }
+    }
+
+    // 循环音源仅在原版 Update 内调整音高与音量，客户端跳过了 AI Update，在此独立驱动嗡鸣反馈
+    static void ClientHum(CrystalEnemy enemy) {
+        Traverse fields = Traverse.Create(enemy);
+        AudioSource source = fields.Field("source").GetValue<AudioSource>();
+        Rigidbody2D rb = fields.Field("rb").GetValue<Rigidbody2D>();
+        BuildingEntity build = fields.Field("build").GetValue<BuildingEntity>();
+        if (source == null || rb == null) {
+            return;
+        }
+        bool stuck = fields.Field("stuck").GetValue<bool>();
+        float timeBeforeAttack = fields.Field("timeBeforeAttack").GetValue<float>();
+        float hurt = build != null ? 1f - build.GetHealth() / 450f : 0f;
+        float wind = Mathf.Clamp01(-timeBeforeAttack) * (stuck ? 0f : 1f);
+        float speed = rb.velocity.magnitude * 0.005f;
+        float pitch = 1f + speed + wind + hurt;
+        float volume = Mathf.Clamp01(0.3f + speed) + wind;
+        source.pitch = Mathf.Lerp(source.pitch, pitch, Time.deltaTime * 8f);
+        source.volume = Mathf.Lerp(source.volume, volume, Time.deltaTime * 8f);
+        if (!source.isPlaying) {
+            source.loop = true;
+            source.Play();
+        }
+    }
+
+    struct Streak {
+        public bool stuck;
+        public bool aimed;
+        public Vector3 from;
+        public Vector3 to;
+    }
+
+    static readonly Dictionary<int, Streak> streaks = new Dictionary<int, Streak>();
+
+    // 宿主在 Update 中绘制蓄力瞄准线与突进残影，客户端跳过 AI 后在此还原线条轨迹
+    static void ClientStreak(CrystalEnemy enemy) {
+        Traverse fields = Traverse.Create(enemy);
+        LineRenderer rend = fields.Field("rend").GetValue<LineRenderer>();
+        SpriteRenderer sprite = fields.Field("sprite").GetValue<SpriteRenderer>();
+        if (rend == null || sprite == null) {
+            return;
+        }
+        bool stuck = fields.Field("stuck").GetValue<bool>();
+        float timeBeforeAttack = fields.Field("timeBeforeAttack").GetValue<float>();
+        int id = enemy.GetInstanceID();
+        if (!streaks.TryGetValue(id, out Streak aim)) {
+            aim = new Streak();
+        }
+        if (!stuck) {
+            aim.from = enemy.transform.position;
+            if (timeBeforeAttack < 0f) {
+                Vector3 from = enemy.transform.position;
+                RaycastHit2D hit = Physics2D.Raycast(from, enemy.transform.up, 999f, PhysicsLayers.GroundMask);
+                Vector3 to = hit.collider != null ? (Vector3)hit.point : from + enemy.transform.up * 999f;
+                rend.SetPosition(0, from);
+                rend.SetPosition(1, to);
+                rend.startColor = Color.Lerp(Color.clear, sprite.color, -timeBeforeAttack * 2f);
+                rend.widthMultiplier = timeBeforeAttack * 2f;
+                aim.aimed = true;
+                aim.to = to;
+            } else {
+                rend.endColor = Color.clear;
+                rend.startColor = Color.clear;
+                aim.aimed = false;
+            }
+        } else {
+            if (!aim.stuck) {
+                if (!aim.aimed) {
+                    Vector3 from = aim.from != Vector3.zero ? aim.from : enemy.transform.position;
+                    RaycastHit2D hit = Physics2D.Raycast(from, enemy.transform.up, 999f, PhysicsLayers.GroundMask);
+                    aim.from = from;
+                    aim.to = hit.collider != null ? (Vector3)hit.point : enemy.transform.position;
+                }
+                rend.SetPosition(0, aim.from);
+                rend.SetPosition(1, aim.to);
+                rend.endColor = sprite.color;
+                rend.startColor = Color.clear;
+            }
+            rend.endColor = Color.Lerp(sprite.color, Color.clear, -timeBeforeAttack);
+        }
+        aim.stuck = stuck;
+        streaks[id] = aim;
+        if (streaks.Count > 64) {
+            streaks.Clear();
+            streaks[id] = aim;
         }
     }
 }
