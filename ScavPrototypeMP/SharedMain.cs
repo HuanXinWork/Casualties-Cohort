@@ -61,10 +61,8 @@ namespace Together {
             presqr *= presqr;
             Vector3 pos = plr.body.transform.position;
             count_plrs_in_range = 0;
-            foreach (ScavPlayer x in ScavPlayer.AllLivingPlayers) {
-                if (x == null || x.body == null) {
-                    continue;
-                }
+            // 与 required_count_plrs_in_range 共享同一过滤列表 plrs（已在上方剔除空引用及应跳过玩家，上游 PR #69）
+            foreach (ScavPlayer x in plrs) {
                 float d = KM.DistanceSqr(x.body.transform.position, pos);
                 if (d < presqr) {
                     count_plrs_in_range++;
